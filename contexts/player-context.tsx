@@ -27,6 +27,7 @@ type PlayerContextValue = {
   playbackRate: number;
   sleepTimerMinutes: number | null;
   sleepSecondsLeft: number | null;
+  sleepPreferenceMinutes: number;
   message: string | null;
   isSeeking: boolean;
   seekMillis: number;
@@ -53,11 +54,16 @@ const MIN_PLAYBACK_RATE = 0.5;
 const MAX_PLAYBACK_RATE = 2.0;
 const MIN_SLEEP_MINUTES = 1;
 const MAX_SLEEP_MINUTES = 720;
+const DEFAULT_PLAYBACK_RATE = 1;
+const DEFAULT_SLEEP_PREFERENCE_MINUTES = 15;
 
 type PersistedPlayerState = {
+  version: 3;
   activeTrackId: string | null;
   positionMillis: number;
   durationMillis: number;
+  playbackRate: number;
+  sleepPreferenceMinutes: number;
 };
 
 function getExtension(uri: string): string {
@@ -165,6 +171,20 @@ function getPlayerStateUri(): string | null {
   return joinUri(FileSystem.documentDirectory, PLAYER_STATE_FILE_NAME);
 }
 
+function clampPlaybackRate(rate: number): number {
+  if (!Number.isFinite(rate)) {
+    return DEFAULT_PLAYBACK_RATE;
+  }
+  return Math.min(MAX_PLAYBACK_RATE, Math.max(MIN_PLAYBACK_RATE, Number(rate.toFixed(2))));
+}
+
+function clampSleepMinutes(minutes: number): number {
+  if (!Number.isFinite(minutes)) {
+    return DEFAULT_SLEEP_PREFERENCE_MINUTES;
+  }
+  return Math.min(MAX_SLEEP_MINUTES, Math.max(MIN_SLEEP_MINUTES, Math.round(minutes)));
+}
+
 async function readPersistedState(): Promise<PersistedPlayerState | null> {
   const stateUri = getPlayerStateUri();
   if (!stateUri) {
@@ -178,11 +198,21 @@ async function readPersistedState(): Promise<PersistedPlayerState | null> {
 
   try {
     const raw = await FileSystem.readAsStringAsync(stateUri);
-    const parsed = JSON.parse(raw) as PersistedPlayerState;
+    const parsed = JSON.parse(raw) as Partial<PersistedPlayerState> & { version?: number };
+    const hasNewPrefs = parsed.version === 3;
     return {
+      version: 3,
       activeTrackId: parsed.activeTrackId ?? null,
       positionMillis: Math.max(0, parsed.positionMillis ?? 0),
       durationMillis: Math.max(0, parsed.durationMillis ?? 0),
+      playbackRate: clampPlaybackRate(
+        hasNewPrefs ? (parsed.playbackRate ?? DEFAULT_PLAYBACK_RATE) : DEFAULT_PLAYBACK_RATE
+      ),
+      sleepPreferenceMinutes: clampSleepMinutes(
+        hasNewPrefs
+          ? (parsed.sleepPreferenceMinutes ?? DEFAULT_SLEEP_PREFERENCE_MINUTES)
+          : DEFAULT_SLEEP_PREFERENCE_MINUTES
+      ),
     };
   } catch {
     return null;
@@ -198,20 +228,6 @@ async function writePersistedState(state: PersistedPlayerState): Promise<void> {
   await FileSystem.writeAsStringAsync(stateUri, JSON.stringify(state));
 }
 
-function clampPlaybackRate(rate: number): number {
-  if (!Number.isFinite(rate)) {
-    return 1;
-  }
-  return Math.min(MAX_PLAYBACK_RATE, Math.max(MIN_PLAYBACK_RATE, Number(rate.toFixed(2))));
-}
-
-function clampSleepMinutes(minutes: number): number {
-  if (!Number.isFinite(minutes)) {
-    return MIN_SLEEP_MINUTES;
-  }
-  return Math.min(MAX_SLEEP_MINUTES, Math.max(MIN_SLEEP_MINUTES, Math.round(minutes)));
-}
-
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const soundRef = useRef<Audio.Sound | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -220,6 +236,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const hasTriedRestoreRef = useRef(false);
   const persistedStateRef = useRef<PersistedPlayerState | null>(null);
   const lastPersistRef = useRef(0);
+  const latestStateRef = useRef<PersistedPlayerState>({
+    version: 3,
+    activeTrackId: null,
+    positionMillis: 0,
+    durationMillis: 0,
+    playbackRate: DEFAULT_PLAYBACK_RATE,
+    sleepPreferenceMinutes: DEFAULT_SLEEP_PREFERENCE_MINUTES,
+  });
 
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loadingTracks, setLoadingTracks] = useState(true);
@@ -227,9 +251,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [positionMillis, setPositionMillis] = useState(0);
   const [durationMillis, setDurationMillis] = useState(0);
-  const [playbackRate, setPlaybackRate] = useState(1.0);
+  const [playbackRate, setPlaybackRate] = useState(DEFAULT_PLAYBACK_RATE);
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(null);
   const [sleepSecondsLeft, setSleepSecondsLeft] = useState<number | null>(null);
+  const [sleepPreferenceMinutes, setSleepPreferenceMinutes] = useState(DEFAULT_SLEEP_PREFERENCE_MINUTES);
   const [audioFolderUri, setAudioFolderUri] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isSeeking, setIsSeeking] = useState(false);
@@ -270,6 +295,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     (minutes: number) => {
       const safeMinutes = clampSleepMinutes(minutes);
       clearSleepTimer();
+      setSleepPreferenceMinutes(safeMinutes);
 
       const durationMs = safeMinutes * 60 * 1000;
       const deadline = Date.now() + durationMs;
@@ -314,9 +340,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const state = await readPersistedState();
       if (mounted) {
         persistedStateRef.current = state;
+        if (state) {
+          setPlaybackRate(state.playbackRate);
+          setSleepPreferenceMinutes(state.sleepPreferenceMinutes);
+        }
         setPersistedReady(true);
       }
     };
+
     void loadPersisted();
     return () => {
       mounted = false;
@@ -478,6 +509,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const changePlaybackRate = useCallback(async (rate: number) => {
     const safeRate = clampPlaybackRate(rate);
     setPlaybackRate(safeRate);
+
     const currentSound = soundRef.current;
     if (!currentSound) {
       return;
@@ -538,20 +570,32 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!activeTrackId) {
-      return;
-    }
     const now = Date.now();
-    if (now - lastPersistRef.current < 2000) {
+    if (now - lastPersistRef.current < 1500) {
       return;
     }
     lastPersistRef.current = now;
+
     void writePersistedState({
+      version: 3,
       activeTrackId,
       positionMillis,
       durationMillis,
+      playbackRate,
+      sleepPreferenceMinutes,
     });
-  }, [activeTrackId, positionMillis, durationMillis]);
+  }, [activeTrackId, positionMillis, durationMillis, playbackRate, sleepPreferenceMinutes]);
+
+  useEffect(() => {
+    latestStateRef.current = {
+      version: 3,
+      activeTrackId,
+      positionMillis,
+      durationMillis,
+      playbackRate,
+      sleepPreferenceMinutes,
+    };
+  }, [activeTrackId, durationMillis, playbackRate, positionMillis, sleepPreferenceMinutes]);
 
   useEffect(() => {
     return () => {
@@ -565,16 +609,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (countdownIntervalRef.current) {
         clearInterval(countdownIntervalRef.current);
       }
-      if (activeTrackId) {
-        void writePersistedState({
-          activeTrackId,
-          positionMillis,
-          durationMillis,
-        });
-      }
+      void writePersistedState(latestStateRef.current);
     };
-    // Intentionally run cleanup only on unmount to avoid unloading active playback during state updates.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const value: PlayerContextValue = {
@@ -589,6 +625,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     playbackRate,
     sleepTimerMinutes,
     sleepSecondsLeft,
+    sleepPreferenceMinutes,
     message,
     isSeeking,
     seekMillis,

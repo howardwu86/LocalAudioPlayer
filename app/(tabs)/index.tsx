@@ -1,25 +1,18 @@
 import Slider from '@react-native-community/slider';
 import { BlurView } from 'expo-blur';
-import { useState } from 'react';
-import {
-  FlatList,
-  Keyboard,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableWithoutFeedback,
-  View,
-} from 'react-native';
+import { FlatList, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useEffect, useState } from 'react';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePlayer } from '@/contexts/player-context';
 
-const PLAYBACK_RATES = [0.9, 0.95, 1.0] as const;
-const TIMER_OPTIONS_MINUTES = [10, 15, 20] as const;
+const SPEED_MIN = 80;
+const SPEED_MAX = 130;
+const SPEED_STEP = 5;
+const SLEEP_MIN = 5;
+const SLEEP_MAX = 60;
+const SLEEP_STEP = 5;
 
 function formatMillis(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -34,6 +27,10 @@ function formatCountdown(totalSeconds: number): string {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+function roundToStep(n: number, step: number): number {
+  return Math.round(n / step) * step;
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const {
@@ -44,8 +41,8 @@ export default function HomeScreen() {
     durationMillis,
     playbackPercent,
     playbackRate,
-    sleepTimerMinutes,
     sleepSecondsLeft,
+    sleepPreferenceMinutes,
     tracks,
     isSeeking,
     seekMillis,
@@ -61,61 +58,68 @@ export default function HomeScreen() {
     onSeekComplete,
   } = usePlayer();
 
-  const [customRateInput, setCustomRateInput] = useState('');
-  const [customTimerInput, setCustomTimerInput] = useState('');
-  const isPresetRate = PLAYBACK_RATES.some((rate) => Math.abs(playbackRate - rate) < 0.001);
+  const speedPercent = Math.round(playbackRate * 100);
+  const speedSliderValue =
+    speedPercent >= SPEED_MIN && speedPercent <= SPEED_MAX
+      ? roundToStep(speedPercent, SPEED_STEP)
+      : 100;
+  const sleepSliderValue =
+    sleepPreferenceMinutes >= SLEEP_MIN && sleepPreferenceMinutes <= SLEEP_MAX
+      ? roundToStep(sleepPreferenceMinutes, SLEEP_STEP)
+      : 15;
+  const [speedPreview, setSpeedPreview] = useState(speedSliderValue);
+  const [sleepPreview, setSleepPreview] = useState(sleepSliderValue);
+  const [openSelector, setOpenSelector] = useState<'speed' | 'sleep' | null>(null);
 
-  const applyCustomRate = () => {
-    const parsed = Number(customRateInput);
-    if (!Number.isFinite(parsed)) {
-      return;
-    }
-    const normalized = parsed > 3 ? parsed / 100 : parsed;
-    void changePlaybackRate(normalized);
-    setCustomRateInput('');
-    Keyboard.dismiss();
+  const sleepTimerOn = sleepSecondsLeft !== null;
+
+  useEffect(() => {
+    setSpeedPreview(speedSliderValue);
+  }, [speedSliderValue]);
+
+  useEffect(() => {
+    setSleepPreview(sleepSliderValue);
+  }, [sleepSliderValue]);
+
+  const openSpeedPopup = () => {
+    setSpeedPreview(speedSliderValue);
+    setOpenSelector('speed');
   };
 
-  const applyCustomTimer = () => {
-    const parsed = Number(customTimerInput);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return;
-    }
-    setSleepTimer(parsed);
-    setCustomTimerInput('');
-    Keyboard.dismiss();
+  const openSleepPopup = () => {
+    setSleepPreview(sleepSliderValue);
+    setOpenSelector('sleep');
   };
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-      <SafeAreaView style={styles.container}>
-        <FlatList
-          data={tracks}
-          keyExtractor={(item) => item.id}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.backgroundListContent}
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => void playTrack(item)}
-              style={[styles.bgTrackItem, item.id === activeTrackId ? styles.bgTrackItemActive : undefined]}>
-              <Text style={styles.bgTrackTitle} numberOfLines={1}>
-                {item.title}
-              </Text>
-            </Pressable>
-          )}
-        />
+    <SafeAreaView style={styles.container}>
+      <FlatList
+        data={tracks}
+        keyExtractor={(item) => item.id}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.backgroundListContent}
+        renderItem={({ item }) => (
+          <Pressable
+            onPress={() => void playTrack(item)}
+            style={[styles.bgTrackItem, item.id === activeTrackId ? styles.bgTrackItemActive : undefined]}>
+            <Text style={styles.bgTrackTitle} numberOfLines={1}>
+              {item.title}
+            </Text>
+          </Pressable>
+        )}
+      />
 
-        <View pointerEvents="none" style={styles.backgroundTint} />
+      <View pointerEvents="none" style={styles.backgroundTint} />
 
-        <View style={[styles.headerBlock, { top: insets.top + 6 }]}>
-          <Text style={styles.headerTitle}>Local Audio Player</Text>
-        </View>
+      <View style={[styles.headerBlock, { top: insets.top + 6 }]}>
+        <Text style={styles.headerTitle}>Local Audio Player</Text>
+      </View>
 
-        <View style={styles.floatingWrap}>
-          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            <View style={styles.floatingShell}>
-              <View style={styles.floatingMask}>
-                <BlurView intensity={60} tint="systemThinMaterialLight" style={styles.floatingGlass}>
+      <View style={styles.floatingWrap}>
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <View style={styles.floatingShell}>
+            <View style={styles.floatingMask}>
+              <BlurView intensity={60} tint="systemThinMaterialLight" style={styles.floatingGlass}>
                 <Text style={styles.nowPlayingLabel}>Now Playing</Text>
                 <Text style={styles.nowPlayingTitle} numberOfLines={1}>
                   {activeTrack ? activeTrack.title : 'Pick a track from playlist'}
@@ -161,93 +165,118 @@ export default function HomeScreen() {
                   </Pressable>
                 </View>
 
-                <View style={styles.sectionBlock}>
-                  <Text style={styles.sectionLabel}>
-                    Speed {isPresetRate ? '' : `• ${Math.round(playbackRate * 100)}% Custom`}
-                  </Text>
-                  <View style={styles.inlineButtonRow}>
-                    {PLAYBACK_RATES.map((rate) => (
-                      <Pressable
-                        key={rate}
-                        onPress={() => void changePlaybackRate(rate)}
-                        style={[styles.chip, Math.abs(playbackRate - rate) < 0.001 ? styles.chipSelected : undefined]}>
-                        <Text
-                          style={[
-                            styles.chipText,
-                            Math.abs(playbackRate - rate) < 0.001 ? styles.chipTextSelected : undefined,
-                          ]}>
-                        {Math.round(rate * 100)}%
-                      </Text>
-                    </Pressable>
-                  ))}
-                    {!isPresetRate ? (
-                      <View style={[styles.chip, styles.chipSelected]}>
-                        <Text style={[styles.chipText, styles.chipTextSelected]}>
-                          {Math.round(playbackRate * 100)}%
-                        </Text>
-                      </View>
-                    ) : null}
-                  </View>
-                  <View style={styles.customRow}>
-                    <TextInput
-                      value={customRateInput}
-                      onChangeText={setCustomRateInput}
-                      placeholder="Custom: 87 or 0.87"
-                      placeholderTextColor="#6d8489"
-                      keyboardType="decimal-pad"
-                      returnKeyType="done"
-                      onSubmitEditing={applyCustomRate}
-                      style={styles.input}
-                    />
-                    <Pressable onPress={applyCustomRate} style={styles.applyButton}>
-                      <Text style={styles.applyButtonText}>Apply</Text>
-                    </Pressable>
-                  </View>
+                <View style={styles.modeButtonRow}>
+                  <Pressable
+                    onPress={openSpeedPopup}
+                    style={[styles.modeButton, openSelector === 'speed' ? styles.modeButtonActive : undefined]}>
+                    <Text style={styles.modeButtonText}>Speed {speedPercent}%</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={openSleepPopup}
+                    style={[styles.modeButton, openSelector === 'sleep' ? styles.modeButtonActive : undefined]}>
+                    <Text style={styles.modeButtonText}>
+                      Sleep Timer {sleepSecondsLeft !== null ? formatCountdown(sleepSecondsLeft) : `${sleepPreferenceMinutes}m`}
+                    </Text>
+                  </Pressable>
                 </View>
 
-                <View style={styles.sectionBlock}>
-                  <Text style={styles.sectionLabel}>
-                    Sleep Timer {sleepSecondsLeft !== null ? `• ${formatCountdown(sleepSecondsLeft)} left` : '• Off'}
-                  </Text>
-                  <View style={styles.inlineButtonRow}>
-                    {TIMER_OPTIONS_MINUTES.map((minutes) => (
+              </BlurView>
+            </View>
+          </View>
+        </ScrollView>
+      </View>
+
+      {openSelector ? (
+        <View style={styles.selectorOverlay}>
+          <Pressable style={styles.selectorBackdrop} onPress={() => setOpenSelector(null)} />
+          <View style={styles.selectorWrap}>
+            <View style={styles.selectorShell}>
+              <View style={styles.selectorMask}>
+                <BlurView intensity={72} tint="systemThinMaterialLight" style={styles.selectorGlass}>
+                  {openSelector === 'speed' ? (
+                    <>
+                      <Text style={styles.sectionLabel}>Speed • {speedPreview}%</Text>
+                      <Slider
+                        minimumValue={SPEED_MIN}
+                        maximumValue={SPEED_MAX}
+                        step={SPEED_STEP}
+                        value={speedPreview}
+                        minimumTrackTintColor="#0f766e"
+                        maximumTrackTintColor="#c7d5d9"
+                        thumbTintColor="#0f766e"
+                        onValueChange={(value) => setSpeedPreview(value)}
+                      />
+                      <View style={styles.sliderLabelsRow}>
+                        <Text style={styles.metaText}>80%</Text>
+                        <Text style={styles.metaText}>90%</Text>
+                        <Text style={styles.metaText}>100%</Text>
+                        <Text style={styles.metaText}>110%</Text>
+                        <Text style={styles.metaText}>120%</Text>
+                        <Text style={styles.metaText}>130%</Text>
+                      </View>
                       <Pressable
-                        key={minutes}
-                        onPress={() => setSleepTimer(minutes)}
-                        style={[styles.chip, sleepTimerMinutes === minutes ? styles.chipSelected : undefined]}>
-                        <Text
-                          style={[styles.chipText, sleepTimerMinutes === minutes ? styles.chipTextSelected : undefined]}>
-                          {minutes}m
-                        </Text>
+                        onPress={() => {
+                          void changePlaybackRate(speedPreview / 100);
+                          setOpenSelector(null);
+                        }}
+                        style={styles.doneButton}>
+                        <Text style={styles.doneButtonText}>Done</Text>
                       </Pressable>
-                    ))}
-                    <Pressable onPress={clearSleepTimer} style={styles.chip}>
-                      <Text style={styles.chipText}>Off</Text>
-                    </Pressable>
-                  </View>
-                  <View style={styles.customRow}>
-                    <TextInput
-                      value={customTimerInput}
-                      onChangeText={setCustomTimerInput}
-                      placeholder="Custom minutes"
-                      placeholderTextColor="#6d8489"
-                      keyboardType="number-pad"
-                      returnKeyType="done"
-                      onSubmitEditing={applyCustomTimer}
-                      style={styles.input}
-                    />
-                    <Pressable onPress={applyCustomTimer} style={styles.applyButton}>
-                      <Text style={styles.applyButtonText}>Apply</Text>
-                    </Pressable>
-                  </View>
-                </View>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.sectionLabel}>
+                        Sleep Timer • {sleepPreview}m
+                        {sleepSecondsLeft !== null ? ` (running ${formatCountdown(sleepSecondsLeft)})` : ''}
+                      </Text>
+                      <Slider
+                        minimumValue={SLEEP_MIN}
+                        maximumValue={SLEEP_MAX}
+                        step={SLEEP_STEP}
+                        value={sleepPreview}
+                        minimumTrackTintColor="#0f766e"
+                        maximumTrackTintColor="#c7d5d9"
+                        thumbTintColor="#0f766e"
+                        onValueChange={(value) => setSleepPreview(value)}
+                      />
+                      <View style={styles.sliderLabelsRow}>
+                        <Text style={styles.metaText}>5m</Text>
+                        <Text style={styles.metaText}>15m</Text>
+                        <Text style={styles.metaText}>30m</Text>
+                        <Text style={styles.metaText}>45m</Text>
+                        <Text style={styles.metaText}>60m</Text>
+                      </View>
+                      <View style={styles.inlineButtonRow}>
+                        <Pressable
+                          onPress={() => {
+                            if (sleepTimerOn) {
+                              clearSleepTimer();
+                            } else {
+                              setSleepTimer(sleepPreferenceMinutes);
+                            }
+                            setOpenSelector(null);
+                          }}
+                          style={styles.chip}>
+                          <Text style={styles.chipText}>{sleepTimerOn ? 'On' : 'Off'}</Text>
+                        </Pressable>
+                      </View>
+                      <Pressable
+                        onPress={() => {
+                          setSleepTimer(sleepPreview);
+                          setOpenSelector(null);
+                        }}
+                        style={styles.doneButton}>
+                        <Text style={styles.doneButtonText}>Done</Text>
+                      </Pressable>
+                    </>
+                  )}
                 </BlurView>
               </View>
             </View>
-          </ScrollView>
+          </View>
         </View>
-      </SafeAreaView>
-    </TouchableWithoutFeedback>
+      ) : null}
+    </SafeAreaView>
   );
 }
 
@@ -376,43 +405,87 @@ const styles = StyleSheet.create({
   },
   sectionBlock: {
     marginTop: 2,
+    gap: 4,
+  },
+  selectorOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  selectorBackdrop: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(9,20,24,0.22)',
+  },
+  selectorWrap: {
+    width: '88%',
+    maxWidth: 430,
+  },
+  selectorShell: {
+    borderRadius: 24,
+    backgroundColor: 'transparent',
+  },
+  selectorMask: {
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
+  selectorGlass: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.78)',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    padding: 16,
+    gap: 6,
+  },
+  modeButtonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
+    marginTop: 2,
+  },
+  modeButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: 'rgba(163,184,189,0.65)',
+    backgroundColor: 'rgba(255,255,255,0.42)',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  modeButtonActive: {
+    borderColor: 'rgba(15,118,110,0.5)',
+    backgroundColor: 'rgba(214,244,240,0.72)',
+  },
+  modeButtonText: {
+    color: '#14363c',
+    fontWeight: '700',
+    fontSize: 13,
   },
   sectionLabel: {
     fontSize: 14,
-    fontWeight: '700',
     color: '#111827',
+  },
+  sliderLabelsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+  metaText: {
+    color: '#567077',
+    fontSize: 11,
+    fontWeight: '600',
   },
   inlineButtonRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-  },
-  customRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  input: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#9eb5b8',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    color: '#0f172a',
-    fontWeight: '500',
-  },
-  applyButton: {
-    borderRadius: 10,
-    backgroundColor: '#0f766e',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  applyButtonText: {
-    color: '#ffffff',
-    fontWeight: '700',
+    marginTop: 4,
   },
   chip: {
     borderWidth: 1,
@@ -422,16 +495,20 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     backgroundColor: 'rgba(255,255,255,0.45)',
   },
-  chipSelected: {
-    borderColor: '#0f766e',
-    backgroundColor: '#d6f4f0',
-  },
   chipText: {
     color: '#14363c',
     fontWeight: '600',
   },
-  chipTextSelected: {
-    color: '#0f766e',
-    fontWeight: '800',
+  doneButton: {
+    alignSelf: 'flex-end',
+    marginTop: 8,
+    borderRadius: 12,
+    backgroundColor: '#0f766e',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  doneButtonText: {
+    color: '#ffffff',
+    fontWeight: '700',
   },
 });
