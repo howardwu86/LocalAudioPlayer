@@ -1,10 +1,4 @@
-import {
-  AVPlaybackStatus,
-  Audio,
-  InterruptionModeAndroid,
-  InterruptionModeIOS,
-  PitchCorrectionQuality,
-} from 'expo-av';
+import { AudioPlayer, createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import * as DocumentPicker from 'expo-document-picker';
 import { Directory } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -35,6 +29,7 @@ type PlayerContextValue = {
   loadTracks: () => Promise<void>;
   importFromFiles: () => Promise<void>;
   importFromFolder: () => Promise<void>;
+  deleteTracks: (trackIds: string[]) => Promise<void>;
   playTrack: (track: Track) => Promise<void>;
   playPrevious: () => Promise<void>;
   playNext: () => Promise<void>;
@@ -70,6 +65,14 @@ type PersistedPlayerState = {
 
 type PickedDirectory = Awaited<ReturnType<typeof Directory.pickDirectoryAsync>>;
 type PickedDirectoryEntry = ReturnType<PickedDirectory['list']>[number];
+type LockScreenCapablePlayer = AudioPlayer & {
+  setActiveForLockScreen?: (
+    active: boolean,
+    metadata?: { title?: string; artist?: string; albumTitle?: string; artworkUrl?: string },
+    options?: { showSeekForward?: boolean; showSeekBackward?: boolean }
+  ) => void;
+  clearLockScreenControls?: () => void;
+};
 
 function getExtension(uri: string): string {
   const cleanUri = uri.split('?')[0];
@@ -228,7 +231,8 @@ async function writePersistedState(state: PersistedPlayerState): Promise<void> {
 }
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const playerRef = useRef<AudioPlayer | null>(null);
+  const playbackSubRef = useRef<{ remove: () => void } | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playNextRef = useRef<(() => Promise<void>) | null>(null);
@@ -312,9 +316,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       }, 1000);
 
       timerRef.current = setTimeout(async () => {
-        const currentSound = soundRef.current;
-        if (currentSound) {
-          await currentSound.pauseAsync();
+        const currentPlayer = playerRef.current;
+        if (currentPlayer) {
+          currentPlayer.pause();
         }
         clearSleepTimer();
       }, durationMs);
@@ -323,13 +327,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
-    void Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: true,
-      interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-      interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-      shouldDuckAndroid: false,
-      playThroughEarpieceAndroid: false,
+    void setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: true,
+      interruptionMode: 'doNotMix',
     });
   }, []);
 
@@ -403,35 +404,47 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const playTrack = useCallback(
     async (track: Track, startPositionMillis = 0) => {
-      const existingSound = soundRef.current;
-      if (existingSound) {
-        await existingSound.unloadAsync();
-        soundRef.current = null;
+      const existingPlayer = playerRef.current as LockScreenCapablePlayer | null;
+      if (existingPlayer) {
+        playbackSubRef.current?.remove();
+        playbackSubRef.current = null;
+        if (typeof existingPlayer.clearLockScreenControls === 'function') {
+          existingPlayer.clearLockScreenControls();
+        }
+        existingPlayer.remove();
+        playerRef.current = null;
       }
 
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: track.uri },
-        {
-          shouldPlay: false,
-          progressUpdateIntervalMillis: 500,
-          positionMillis: Math.max(0, startPositionMillis),
-        }
-      );
+      const player = createAudioPlayer({ uri: track.uri }, { updateInterval: 500, keepAudioSessionActive: true });
+      player.setPlaybackRate(clampPlaybackRate(playbackRate), 'medium');
+      const lockScreenPlayer = player as LockScreenCapablePlayer;
+      if (typeof lockScreenPlayer.setActiveForLockScreen === 'function') {
+        lockScreenPlayer.setActiveForLockScreen(
+          true,
+          {
+            title: track.title,
+            artist: 'Local Audio Player',
+            albumTitle: 'On My iPhone',
+          },
+          {
+            showSeekForward: true,
+            showSeekBackward: true,
+          }
+        );
+      }
 
-      await sound.setRateAsync(clampPlaybackRate(playbackRate), true, PitchCorrectionQuality.Medium);
-
-      sound.setOnPlaybackStatusUpdate((status: AVPlaybackStatus) => {
+      playbackSubRef.current = player.addListener('playbackStatusUpdate', (status) => {
         if (!status.isLoaded) {
           return;
         }
 
-        setIsPlaying(status.isPlaying);
+        setIsPlaying(status.playing);
         if (!isSeeking) {
-          setPositionMillis(status.positionMillis ?? 0);
+          setPositionMillis(Math.max(0, Math.round((status.currentTime ?? 0) * 1000)));
         }
-        setDurationMillis(status.durationMillis ?? 0);
+        setDurationMillis(Math.max(0, Math.round((status.duration ?? 0) * 1000)));
 
-        if (status.didJustFinish && !status.isLooping) {
+        if (status.didJustFinish && !status.loop) {
           const triggerNext = playNextRef.current;
           if (triggerNext) {
             void triggerNext();
@@ -439,10 +452,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }
       });
 
-      soundRef.current = sound;
+      playerRef.current = player;
       setActiveTrackId(track.id);
+      if (startPositionMillis > 0) {
+        await player.seekTo(startPositionMillis / 1000);
+      }
       setPositionMillis(Math.max(0, startPositionMillis));
-      await sound.playAsync();
+      player.play();
     },
     [isSeeking, playbackRate]
   );
@@ -485,33 +501,29 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [playNext]);
 
   const togglePlayPause = useCallback(async () => {
-    const currentSound = soundRef.current;
-    if (!currentSound) {
+    const currentPlayer = playerRef.current;
+    if (!currentPlayer) {
       if (activeTrack) {
         await playTrack(activeTrack, positionMillis);
       }
       return;
     }
-    const status = await currentSound.getStatusAsync();
-    if (!status.isLoaded) {
+    if (currentPlayer.playing) {
+      currentPlayer.pause();
       return;
     }
-    if (status.isPlaying) {
-      await currentSound.pauseAsync();
-      return;
-    }
-    await currentSound.playAsync();
+    currentPlayer.play();
   }, [activeTrack, playTrack, positionMillis]);
 
   const changePlaybackRate = useCallback(async (rate: number) => {
     const safeRate = clampPlaybackRate(rate);
     setPlaybackRate(safeRate);
 
-    const currentSound = soundRef.current;
-    if (!currentSound) {
+    const currentPlayer = playerRef.current;
+    if (!currentPlayer) {
       return;
     }
-    await currentSound.setRateAsync(safeRate, true, PitchCorrectionQuality.Medium);
+    currentPlayer.setPlaybackRate(safeRate, 'medium');
   }, []);
 
   const importFromFiles = useCallback(async () => {
@@ -585,6 +597,52 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     await loadTracks();
   }, [audioFolderUri, loadTracks]);
 
+  const deleteTracks = useCallback(
+    async (trackIds: string[]) => {
+      const uniqueIds = Array.from(new Set(trackIds)).filter(Boolean);
+      if (!uniqueIds.length) {
+        return;
+      }
+
+      const deletingActive = activeTrackId ? uniqueIds.includes(activeTrackId) : false;
+      if (deletingActive) {
+        const currentPlayer = playerRef.current;
+        if (currentPlayer) {
+          playbackSubRef.current?.remove();
+          playbackSubRef.current = null;
+          const lockScreenPlayer = currentPlayer as LockScreenCapablePlayer;
+          if (typeof lockScreenPlayer.clearLockScreenControls === 'function') {
+            lockScreenPlayer.clearLockScreenControls();
+          }
+          currentPlayer.remove();
+          playerRef.current = null;
+        }
+        setActiveTrackId(null);
+        setIsPlaying(false);
+        setPositionMillis(0);
+        setDurationMillis(0);
+      }
+
+      let deletedCount = 0;
+      for (const uri of uniqueIds) {
+        try {
+          await FileSystem.deleteAsync(uri, { idempotent: true });
+          deletedCount += 1;
+        } catch {
+          // Ignore individual delete failures and continue deleting remaining files.
+        }
+      }
+
+      if (deletedCount > 0) {
+        setMessage(`Deleted ${deletedCount} track${deletedCount > 1 ? 's' : ''}`);
+        setTimeout(() => setMessage(null), 2500);
+      }
+
+      await loadTracks();
+    },
+    [activeTrackId, loadTracks]
+  );
+
   const onSeekStart = useCallback(() => {
     setIsSeeking(true);
     setSeekMillis(positionMillis);
@@ -595,9 +653,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const onSeekComplete = useCallback(async (value: number) => {
-    const currentSound = soundRef.current;
-    if (currentSound) {
-      await currentSound.setPositionAsync(value);
+    const currentPlayer = playerRef.current;
+    if (currentPlayer) {
+      await currentPlayer.seekTo(value / 1000);
     }
     setPositionMillis(value);
     setIsSeeking(false);
@@ -633,9 +691,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     return () => {
-      const currentSound = soundRef.current;
-      if (currentSound) {
-        void currentSound.unloadAsync();
+      const currentPlayer = playerRef.current;
+      if (currentPlayer) {
+        playbackSubRef.current?.remove();
+        playbackSubRef.current = null;
+        const lockScreenPlayer = currentPlayer as LockScreenCapablePlayer;
+        if (typeof lockScreenPlayer.clearLockScreenControls === 'function') {
+          lockScreenPlayer.clearLockScreenControls();
+        }
+        currentPlayer.remove();
       }
       if (timerRef.current) {
         clearTimeout(timerRef.current);
@@ -666,6 +730,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     loadTracks,
     importFromFiles,
     importFromFolder,
+    deleteTracks,
     playTrack,
     playPrevious,
     playNext,
