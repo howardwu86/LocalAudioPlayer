@@ -58,7 +58,7 @@ const DEFAULT_PLAYBACK_RATE = 1;
 const DEFAULT_SLEEP_PREFERENCE_MINUTES = 15;
 
 type PersistedPlayerState = {
-  version: 3;
+  version: 4;
   activeTrackId: string | null;
   positionMillis: number;
   durationMillis: number;
@@ -199,9 +199,9 @@ async function readPersistedState(): Promise<PersistedPlayerState | null> {
   try {
     const raw = await FileSystem.readAsStringAsync(stateUri);
     const parsed = JSON.parse(raw) as Partial<PersistedPlayerState> & { version?: number };
-    const hasNewPrefs = parsed.version === 3;
+    const hasNewPrefs = parsed.version === 4;
     return {
-      version: 3,
+      version: 4,
       activeTrackId: parsed.activeTrackId ?? null,
       positionMillis: Math.max(0, parsed.positionMillis ?? 0),
       durationMillis: Math.max(0, parsed.durationMillis ?? 0),
@@ -237,7 +237,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const persistedStateRef = useRef<PersistedPlayerState | null>(null);
   const lastPersistRef = useRef(0);
   const latestStateRef = useRef<PersistedPlayerState>({
-    version: 3,
+    version: 4,
     activeTrackId: null,
     positionMillis: 0,
     durationMillis: 0,
@@ -577,7 +577,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     lastPersistRef.current = now;
 
     void writePersistedState({
-      version: 3,
+      version: 4,
       activeTrackId,
       positionMillis,
       durationMillis,
@@ -588,7 +588,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     latestStateRef.current = {
-      version: 3,
+      version: 4,
       activeTrackId,
       positionMillis,
       durationMillis,

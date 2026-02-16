@@ -1,8 +1,10 @@
 import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 
 import { usePlayer } from '@/contexts/player-context';
 
 export default function FilesScreen() {
+  const router = useRouter();
   const { tracks, loadingTracks, activeTrackId, playTrack, importFromFiles, loadTracks, message } = usePlayer();
 
   return (
@@ -13,7 +15,7 @@ export default function FilesScreen() {
 
       <View style={styles.actionsRow}>
         <Pressable onPress={() => void loadTracks()} style={styles.actionButton}>
-          <Text style={styles.actionButtonText}>Rescan</Text>
+          <Text style={styles.actionButtonText}>Scan</Text>
         </Pressable>
         <Pressable onPress={() => void importFromFiles()} style={styles.actionButtonPrimary}>
           <Text style={styles.actionButtonPrimaryText}>Import</Text>
@@ -37,10 +39,13 @@ export default function FilesScreen() {
         <FlatList
           data={tracks}
           keyExtractor={(item) => item.id}
-          showsVerticalScrollIndicator={false}
+          showsVerticalScrollIndicator
           renderItem={({ item }) => (
             <Pressable
-              onPress={() => void playTrack(item)}
+              onPress={() => {
+                void playTrack(item);
+                router.navigate('/(tabs)');
+              }}
               style={[styles.trackItem, item.id === activeTrackId ? styles.trackItemActive : undefined]}>
               <Text style={styles.trackTitle} numberOfLines={1}>
                 {item.title}
@@ -57,11 +62,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#eef5f6',
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
   },
   headerRow: {
     marginTop: 8,
     marginBottom: 10,
+    paddingHorizontal: 6,
   },
   title: {
     fontSize: 32,
@@ -73,6 +79,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     marginBottom: 8,
+    paddingHorizontal: 6,
   },
   actionButton: {
     flex: 1,

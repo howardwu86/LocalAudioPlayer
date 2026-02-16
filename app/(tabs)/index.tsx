@@ -1,18 +1,14 @@
 import Slider from '@react-native-community/slider';
 import { BlurView } from 'expo-blur';
-import { FlatList, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePlayer } from '@/contexts/player-context';
 
-const SPEED_MIN = 80;
-const SPEED_MAX = 130;
-const SPEED_STEP = 5;
-const SLEEP_MIN = 5;
-const SLEEP_MAX = 60;
-const SLEEP_STEP = 5;
+const SPEED_PRESETS = [80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130] as const;
+const SLEEP_PRESETS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60] as const;
 
 function formatMillis(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -27,10 +23,6 @@ function formatCountdown(totalSeconds: number): string {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-function roundToStep(n: number, step: number): number {
-  return Math.round(n / step) * step;
-}
-
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const {
@@ -41,6 +33,7 @@ export default function HomeScreen() {
     durationMillis,
     playbackPercent,
     playbackRate,
+    sleepTimerMinutes,
     sleepSecondsLeft,
     sleepPreferenceMinutes,
     tracks,
@@ -59,45 +52,54 @@ export default function HomeScreen() {
   } = usePlayer();
 
   const speedPercent = Math.round(playbackRate * 100);
-  const speedSliderValue =
-    speedPercent >= SPEED_MIN && speedPercent <= SPEED_MAX
-      ? roundToStep(speedPercent, SPEED_STEP)
-      : 100;
-  const sleepSliderValue =
-    sleepPreferenceMinutes >= SLEEP_MIN && sleepPreferenceMinutes <= SLEEP_MAX
-      ? roundToStep(sleepPreferenceMinutes, SLEEP_STEP)
-      : 15;
-  const [speedPreview, setSpeedPreview] = useState(speedSliderValue);
-  const [sleepPreview, setSleepPreview] = useState(sleepSliderValue);
-  const [openSelector, setOpenSelector] = useState<'speed' | 'sleep' | null>(null);
-
   const sleepTimerOn = sleepSecondsLeft !== null;
+  const [sheet, setSheet] = useState<'speed' | 'sleep' | null>(null);
+  const backgroundListRef = useRef<FlatList<{ id: string; title: string; uri: string }> | null>(null);
+
+  const activeTrackIndex = useMemo(
+    () => tracks.findIndex((track) => track.id === activeTrackId),
+    [tracks, activeTrackId]
+  );
 
   useEffect(() => {
-    setSpeedPreview(speedSliderValue);
-  }, [speedSliderValue]);
+    if (activeTrackIndex < 0) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      backgroundListRef.current?.scrollToIndex({
+        index: activeTrackIndex,
+        animated: true,
+        viewPosition: 0.5,
+      });
+    }, 120);
 
-  useEffect(() => {
-    setSleepPreview(sleepSliderValue);
-  }, [sleepSliderValue]);
+    return () => clearTimeout(timer);
+  }, [activeTrackIndex]);
 
-  const openSpeedPopup = () => {
-    setSpeedPreview(speedSliderValue);
-    setOpenSelector('speed');
+  const showSpeedSheet = () => {
+    setSheet('speed');
   };
 
-  const openSleepPopup = () => {
-    setSleepPreview(sleepSliderValue);
-    setOpenSelector('sleep');
+  const showSleepSheet = () => {
+    setSheet('sleep');
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <FlatList
+        ref={backgroundListRef}
         data={tracks}
         keyExtractor={(item) => item.id}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator
+        scrollIndicatorInsets={{ bottom: 420 }}
         contentContainerStyle={styles.backgroundListContent}
+        onScrollToIndexFailed={({ index, averageItemLength }) => {
+          backgroundListRef.current?.scrollToOffset({
+            offset: Math.max(0, index * averageItemLength - 140),
+            animated: true,
+          });
+        }}
         renderItem={({ item }) => (
           <Pressable
             onPress={() => void playTrack(item)}
@@ -111,7 +113,7 @@ export default function HomeScreen() {
 
       <View pointerEvents="none" style={styles.backgroundTint} />
 
-      <View style={[styles.headerBlock, { top: insets.top + 6 }]}>
+      <View style={[styles.headerBlock, { top: insets.top + 6 }]}> 
         <Text style={styles.headerTitle}>Local Audio Player</Text>
       </View>
 
@@ -120,6 +122,7 @@ export default function HomeScreen() {
           <View style={styles.floatingShell}>
             <View style={styles.floatingMask}>
               <BlurView intensity={60} tint="systemThinMaterialLight" style={styles.floatingGlass}>
+                <View style={styles.floatingAccent} />
                 <Text style={styles.nowPlayingLabel}>Now Playing</Text>
                 <Text style={styles.nowPlayingTitle} numberOfLines={1}>
                   {activeTrack ? activeTrack.title : 'Pick a track from playlist'}
@@ -151,12 +154,14 @@ export default function HomeScreen() {
                     style={[styles.transportButton, !tracks.length && styles.buttonDisabled]}>
                     <IconSymbol name="backward.fill" size={18} color="#15424b" />
                   </Pressable>
-                  <Pressable
-                    onPress={() => void togglePlayPause()}
-                    disabled={!activeTrack}
-                    style={[styles.playButton, !activeTrack && styles.buttonDisabled]}>
-                    <IconSymbol name={isPlaying ? 'pause.fill' : 'play.fill'} size={24} color="#ffffff" />
-                  </Pressable>
+                  <View style={styles.playOrb}>
+                    <Pressable
+                      onPress={() => void togglePlayPause()}
+                      disabled={!activeTrack}
+                      style={[styles.playButton, !activeTrack && styles.buttonDisabled]}>
+                      <IconSymbol name={isPlaying ? 'pause.fill' : 'play.fill'} size={24} color="#ffffff" />
+                    </Pressable>
+                  </View>
                   <Pressable
                     onPress={() => void playNext()}
                     disabled={!tracks.length}
@@ -166,116 +171,88 @@ export default function HomeScreen() {
                 </View>
 
                 <View style={styles.modeButtonRow}>
-                  <Pressable
-                    onPress={openSpeedPopup}
-                    style={[styles.modeButton, openSelector === 'speed' ? styles.modeButtonActive : undefined]}>
+                  <Pressable onPress={showSpeedSheet} style={styles.modeButton}>
                     <Text style={styles.modeButtonText}>Speed {speedPercent}%</Text>
                   </Pressable>
-                  <Pressable
-                    onPress={openSleepPopup}
-                    style={[styles.modeButton, openSelector === 'sleep' ? styles.modeButtonActive : undefined]}>
+                  <Pressable onPress={showSleepSheet} style={styles.modeButton}>
                     <Text style={styles.modeButtonText}>
                       Sleep Timer {sleepSecondsLeft !== null ? formatCountdown(sleepSecondsLeft) : `${sleepPreferenceMinutes}m`}
                     </Text>
                   </Pressable>
                 </View>
-
               </BlurView>
             </View>
           </View>
         </ScrollView>
       </View>
 
-      {openSelector ? (
-        <View style={styles.selectorOverlay}>
-          <Pressable style={styles.selectorBackdrop} onPress={() => setOpenSelector(null)} />
-          <View style={styles.selectorWrap}>
-            <View style={styles.selectorShell}>
-              <View style={styles.selectorMask}>
-                <BlurView intensity={72} tint="systemThinMaterialLight" style={styles.selectorGlass}>
-                  {openSelector === 'speed' ? (
-                    <>
-                      <Text style={styles.sectionLabel}>Speed • {speedPreview}%</Text>
-                      <Slider
-                        minimumValue={SPEED_MIN}
-                        maximumValue={SPEED_MAX}
-                        step={SPEED_STEP}
-                        value={speedPreview}
-                        minimumTrackTintColor="#0f766e"
-                        maximumTrackTintColor="#c7d5d9"
-                        thumbTintColor="#0f766e"
-                        onValueChange={(value) => setSpeedPreview(value)}
-                      />
-                      <View style={styles.sliderLabelsRow}>
-                        <Text style={styles.metaText}>80%</Text>
-                        <Text style={styles.metaText}>90%</Text>
-                        <Text style={styles.metaText}>100%</Text>
-                        <Text style={styles.metaText}>110%</Text>
-                        <Text style={styles.metaText}>120%</Text>
-                        <Text style={styles.metaText}>130%</Text>
-                      </View>
-                      <Pressable
-                        onPress={() => {
-                          void changePlaybackRate(speedPreview / 100);
-                          setOpenSelector(null);
-                        }}
-                        style={styles.doneButton}>
-                        <Text style={styles.doneButtonText}>Done</Text>
-                      </Pressable>
-                    </>
-                  ) : (
-                    <>
-                      <Text style={styles.sectionLabel}>
-                        Sleep Timer • {sleepPreview}m
-                        {sleepSecondsLeft !== null ? ` (running ${formatCountdown(sleepSecondsLeft)})` : ''}
-                      </Text>
-                      <Slider
-                        minimumValue={SLEEP_MIN}
-                        maximumValue={SLEEP_MAX}
-                        step={SLEEP_STEP}
-                        value={sleepPreview}
-                        minimumTrackTintColor="#0f766e"
-                        maximumTrackTintColor="#c7d5d9"
-                        thumbTintColor="#0f766e"
-                        onValueChange={(value) => setSleepPreview(value)}
-                      />
-                      <View style={styles.sliderLabelsRow}>
-                        <Text style={styles.metaText}>5m</Text>
-                        <Text style={styles.metaText}>15m</Text>
-                        <Text style={styles.metaText}>30m</Text>
-                        <Text style={styles.metaText}>45m</Text>
-                        <Text style={styles.metaText}>60m</Text>
-                      </View>
-                      <View style={styles.inlineButtonRow}>
+      <Modal transparent visible={sheet !== null} animationType="fade" onRequestClose={() => setSheet(null)}>
+        <View style={styles.sheetOverlay}>
+          <Pressable style={styles.sheetBackdrop} onPress={() => setSheet(null)} />
+          <View style={[styles.sheetWrap, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+            <View style={styles.sheetGroup}>
+              {sheet === 'speed' ? (
+                <>
+                  <Text style={styles.sheetTitle}>Playback Speed</Text>
+                  <View style={styles.sheetOptionsGrid}>
+                    {SPEED_PRESETS.map((preset) => {
+                      const active = preset === speedPercent;
+                      return (
                         <Pressable
+                          key={preset}
                           onPress={() => {
-                            if (sleepTimerOn) {
-                              clearSleepTimer();
-                            } else {
-                              setSleepTimer(sleepPreferenceMinutes);
-                            }
-                            setOpenSelector(null);
+                            void changePlaybackRate(preset / 100);
+                            setSheet(null);
                           }}
-                          style={styles.chip}>
-                          <Text style={styles.chipText}>{sleepTimerOn ? 'On' : 'Off'}</Text>
+                          style={[styles.sheetPill, active && styles.sheetPillActive]}>
+                          <Text style={[styles.sheetPillText, active && styles.sheetPillTextActive]}>{preset}%</Text>
                         </Pressable>
-                      </View>
-                      <Pressable
-                        onPress={() => {
-                          setSleepTimer(sleepPreview);
-                          setOpenSelector(null);
-                        }}
-                        style={styles.doneButton}>
-                        <Text style={styles.doneButtonText}>Done</Text>
-                      </Pressable>
-                    </>
-                  )}
-                </BlurView>
-              </View>
+                      );
+                    })}
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.sheetTitle}>
+                    Sleep Timer {sleepTimerOn ? `(${formatCountdown(sleepSecondsLeft ?? 0)})` : ''}
+                  </Text>
+                  <View style={styles.toggleRow}>
+                    <Pressable
+                      onPress={() => setSleepTimer(sleepPreferenceMinutes)}
+                      style={[styles.toggleButton, sleepTimerOn && styles.toggleButtonActive]}>
+                      <Text style={[styles.toggleText, sleepTimerOn && styles.toggleTextActive]}>Timer On</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => clearSleepTimer()}
+                      style={[styles.toggleButton, !sleepTimerOn && styles.toggleButtonActive]}>
+                      <Text style={[styles.toggleText, !sleepTimerOn && styles.toggleTextActive]}>Timer Off</Text>
+                    </Pressable>
+                  </View>
+                  <View style={styles.sheetOptionsGrid}>
+                    {SLEEP_PRESETS.map((preset) => {
+                      const active = sleepTimerOn && preset === sleepTimerMinutes;
+                      return (
+                        <Pressable
+                          key={preset}
+                          onPress={() => {
+                            setSleepTimer(preset);
+                            setSheet(null);
+                          }}
+                          style={[styles.sheetPill, active && styles.sheetPillActive]}>
+                          <Text style={[styles.sheetPillText, active && styles.sheetPillTextActive]}>{preset}m</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
             </View>
+            <Pressable style={styles.cancelButton} onPress={() => setSheet(null)}>
+              <Text style={styles.cancelText}>Cancel</Text>
+            </Pressable>
           </View>
         </View>
-      ) : null}
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -334,28 +311,37 @@ const styles = StyleSheet.create({
     maxHeight: '68%',
   },
   floatingShell: {
-    borderRadius: 32,
-    backgroundColor: 'transparent',
+    borderRadius: 36,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.72)',
+    backgroundColor: 'rgba(255,255,255,0.16)',
   },
   floatingMask: {
-    borderRadius: 32,
+    borderRadius: 36,
     overflow: 'hidden',
   },
   floatingGlass: {
-    padding: 16,
-    gap: 10,
+    padding: 18,
+    gap: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.75)',
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: 'rgba(255,255,255,0.28)',
+  },
+  floatingAccent: {
+    height: 4,
+    width: 58,
+    borderRadius: 999,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(15,118,110,0.42)',
   },
   nowPlayingLabel: {
-    fontSize: 13,
-    color: '#5b6b72',
+    fontSize: 14,
+    color: '#4a5e65',
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 1,
   },
   nowPlayingTitle: {
-    fontSize: 20,
+    fontSize: 21,
     fontWeight: '700',
     color: '#0f172a',
   },
@@ -377,71 +363,39 @@ const styles = StyleSheet.create({
   transportRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 22,
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    marginTop: 2,
+  },
+  playOrb: {
+    borderRadius: 999,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.82)',
+    backgroundColor: 'rgba(255,255,255,0.34)',
   },
   playButton: {
-    width: 68,
-    height: 68,
+    width: 74,
+    height: 74,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0f766e',
-    borderRadius: 34,
+    backgroundColor: '#0e7f76',
+    borderRadius: 37,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.65)',
+    borderColor: 'rgba(255,255,255,0.92)',
   },
   transportButton: {
-    width: 52,
-    height: 52,
+    width: 54,
+    height: 54,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(121,149,153,0.45)',
-    backgroundColor: 'rgba(255,255,255,0.35)',
-    borderRadius: 26,
+    borderColor: 'rgba(108,138,142,0.45)',
+    backgroundColor: 'rgba(255,255,255,0.48)',
+    borderRadius: 27,
   },
   buttonDisabled: {
     opacity: 0.45,
-  },
-  sectionBlock: {
-    marginTop: 2,
-    gap: 4,
-  },
-  selectorOverlay: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  selectorBackdrop: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: 'rgba(9,20,24,0.22)',
-  },
-  selectorWrap: {
-    width: '88%',
-    maxWidth: 430,
-  },
-  selectorShell: {
-    borderRadius: 24,
-    backgroundColor: 'transparent',
-  },
-  selectorMask: {
-    borderRadius: 24,
-    overflow: 'hidden',
-  },
-  selectorGlass: {
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.78)',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    padding: 16,
-    gap: 6,
   },
   modeButtonRow: {
     flexDirection: 'row',
@@ -458,57 +412,104 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
   },
-  modeButtonActive: {
-    borderColor: 'rgba(15,118,110,0.5)',
-    backgroundColor: 'rgba(214,244,240,0.72)',
-  },
   modeButtonText: {
     color: '#14363c',
     fontWeight: '700',
     fontSize: 13,
   },
-  sectionLabel: {
-    fontSize: 14,
-    color: '#111827',
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
   },
-  sliderLabelsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 2,
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(5, 12, 16, 0.25)',
   },
-  metaText: {
-    color: '#567077',
-    fontSize: 11,
-    fontWeight: '600',
+  sheetWrap: {
+    paddingHorizontal: 10,
   },
-  inlineButtonRow: {
+  sheetGroup: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(248, 251, 253, 0.95)',
+    borderWidth: 1,
+    borderColor: 'rgba(180, 193, 197, 0.7)',
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 10,
+    gap: 10,
+  },
+  sheetTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#5b6b72',
+    textAlign: 'center',
+  },
+  sheetOptionsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginTop: 4,
+    justifyContent: 'center',
   },
-  chip: {
+  sheetPill: {
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#9eb5b8',
-    borderRadius: 999,
-    paddingHorizontal: 12,
+    borderColor: 'rgba(163,184,189,0.7)',
+    backgroundColor: 'rgba(255,255,255,0.65)',
     paddingVertical: 8,
-    backgroundColor: 'rgba(255,255,255,0.45)',
+    paddingHorizontal: 12,
+    minWidth: 58,
+    alignItems: 'center',
   },
-  chipText: {
+  sheetPillActive: {
+    backgroundColor: '#d7f3ee',
+    borderColor: '#0f766e',
+  },
+  sheetPillText: {
     color: '#14363c',
-    fontWeight: '600',
-  },
-  doneButton: {
-    alignSelf: 'flex-end',
-    marginTop: 8,
-    borderRadius: 12,
-    backgroundColor: '#0f766e',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  doneButtonText: {
-    color: '#ffffff',
     fontWeight: '700',
+    fontSize: 13,
+  },
+  sheetPillTextActive: {
+    color: '#0f766e',
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  toggleButton: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(163,184,189,0.7)',
+    backgroundColor: 'rgba(255,255,255,0.65)',
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  toggleButtonActive: {
+    backgroundColor: '#d7f3ee',
+    borderColor: '#0f766e',
+  },
+  toggleText: {
+    color: '#14363c',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  toggleTextActive: {
+    color: '#0f766e',
+  },
+  cancelButton: {
+    marginTop: 8,
+    borderRadius: 16,
+    backgroundColor: 'rgba(248, 251, 253, 0.95)',
+    borderWidth: 1,
+    borderColor: 'rgba(180, 193, 197, 0.7)',
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  cancelText: {
+    color: '#0f766e',
+    fontWeight: '800',
+    fontSize: 17,
   },
 });
