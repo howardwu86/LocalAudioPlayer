@@ -662,6 +662,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!persistedReady) {
+      return;
+    }
     const now = Date.now();
     if (now - lastPersistRef.current < 1500) {
       return;
