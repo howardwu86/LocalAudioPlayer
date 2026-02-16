@@ -4,6 +4,7 @@ import { BlurView } from 'expo-blur';
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { usePlayer } from '@/contexts/player-context';
+import { ThemeMode, useThemeMode } from '@/contexts/theme-mode-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 const TRACK_ROW_HEIGHT = 58;
@@ -11,6 +12,7 @@ const TRACK_ROW_HEIGHT = 58;
 export default function FilesScreen() {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
+  const { mode, setMode } = useThemeMode();
   const router = useRouter();
   const { tracks, loadingTracks, activeTrackId, playTrack, importFromFiles, importFromFolder, deleteTracks, loadTracks, message } =
     usePlayer();
@@ -216,6 +218,31 @@ export default function FilesScreen() {
         <Text style={[styles.title, { color: palette.title }]}>Files</Text>
       </View>
 
+      <View style={styles.themeModeRow}>
+        <Text style={[styles.themeModeLabel, { color: palette.sectionTitle }]}>Theme</Text>
+        <View style={styles.themeModeOptions}>
+          {(['system', 'light', 'dark'] as ThemeMode[]).map((option) => {
+            const active = mode === option;
+            return (
+              <Pressable
+                key={option}
+                onPress={() => setMode(option)}
+                style={[
+                  styles.themeModeButton,
+                  {
+                    borderColor: active ? palette.itemActiveBorder : palette.outlineButtonBorder,
+                    backgroundColor: active ? palette.itemActiveBg : palette.outlineButtonBg,
+                  },
+                ]}>
+                <Text style={[styles.themeModeButtonText, { color: palette.outlineText }]}>
+                  {option === 'system' ? 'System' : option === 'light' ? 'Light' : 'Dark'}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
       <View style={styles.actionsRow}>
         <View style={styles.glassButtonShell}>
           <BlurView
@@ -374,6 +401,33 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 8,
     paddingHorizontal: 6,
+  },
+  themeModeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    paddingHorizontal: 6,
+    gap: 8,
+  },
+  themeModeLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  themeModeOptions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  themeModeButton: {
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  themeModeButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   actionButton: {
     borderRadius: 12,
