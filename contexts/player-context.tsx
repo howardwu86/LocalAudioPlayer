@@ -6,6 +6,7 @@ import {
   PitchCorrectionQuality,
 } from 'expo-av';
 import * as DocumentPicker from 'expo-document-picker';
+import { Directory } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -33,6 +34,7 @@ type PlayerContextValue = {
   seekMillis: number;
   loadTracks: () => Promise<void>;
   importFromFiles: () => Promise<void>;
+  importFromFolder: () => Promise<void>;
   playTrack: (track: Track) => Promise<void>;
   playPrevious: () => Promise<void>;
   playNext: () => Promise<void>;
@@ -65,6 +67,9 @@ type PersistedPlayerState = {
   playbackRate: number;
   sleepPreferenceMinutes: number;
 };
+
+type PickedDirectory = Awaited<ReturnType<typeof Directory.pickDirectoryAsync>>;
+type PickedDirectoryEntry = ReturnType<PickedDirectory['list']>[number];
 
 function getExtension(uri: string): string {
   const cleanUri = uri.split('?')[0];
@@ -116,36 +121,6 @@ async function scanAudioInDirectory(rootUri: string): Promise<string[]> {
   return results;
 }
 
-async function copyBundledAudioIfNeeded(targetFolderUri: string): Promise<void> {
-  const existing = await scanAudioInDirectory(targetFolderUri).catch(() => []);
-  if (existing.length > 0 || !FileSystem.bundleDirectory) {
-    return;
-  }
-
-  const bundledAudio = (await scanAudioInDirectory(FileSystem.bundleDirectory).catch(() => [])).filter((uri) =>
-    uri.includes('/assets/audio/')
-  );
-
-  for (const sourceUri of bundledAudio) {
-    const originalName = sourceUri.split('/').pop() ?? `audio_${Date.now()}`;
-    const { base, ext } = splitBaseAndExt(originalName);
-    let candidateName = `${base}${ext}`;
-    let candidateUri = joinUri(targetFolderUri, candidateName);
-    let index = 1;
-
-    while ((await FileSystem.getInfoAsync(candidateUri)).exists) {
-      candidateName = `${base}_${index}${ext}`;
-      candidateUri = joinUri(targetFolderUri, candidateName);
-      index += 1;
-    }
-
-    await FileSystem.copyAsync({
-      from: sourceUri,
-      to: candidateUri,
-    });
-  }
-}
-
 async function copyFileIntoAudioFolder(sourceUri: string, targetFolderUri: string, preferredName: string) {
   const { base, ext } = splitBaseAndExt(preferredName);
   let candidateName = `${base}${ext}`;
@@ -162,6 +137,30 @@ async function copyFileIntoAudioFolder(sourceUri: string, targetFolderUri: strin
     from: sourceUri,
     to: candidateUri,
   });
+}
+
+function isDirectoryEntry(entry: PickedDirectoryEntry): entry is PickedDirectory {
+  return 'list' in entry;
+}
+
+async function scanPickedDirectoryForAudio(directory: PickedDirectory): Promise<Array<{ uri: string; name: string }>> {
+  const entries = directory.list();
+  const collected: Array<{ uri: string; name: string }> = [];
+
+  for (const entry of entries) {
+    if (isDirectoryEntry(entry)) {
+      collected.push(...(await scanPickedDirectoryForAudio(entry)));
+      continue;
+    }
+
+    const derivedName = entry.uri.split('/').pop() ?? `audio_${Date.now()}`;
+    const extension = getExtension(derivedName || entry.uri);
+    if (AUDIO_EXTENSIONS.has(extension)) {
+      collected.push({ uri: entry.uri, name: derivedName });
+    }
+  }
+
+  return collected;
 }
 
 function getPlayerStateUri(): string | null {
@@ -365,12 +364,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       const appAudioFolderUri = joinUri(FileSystem.documentDirectory, APP_AUDIO_FOLDER_NAME);
       setAudioFolderUri(appAudioFolderUri);
-
       await FileSystem.makeDirectoryAsync(appAudioFolderUri, { intermediates: true });
-      await copyBundledAudioIfNeeded(appAudioFolderUri);
-
-      const uris = await scanAudioInDirectory(appAudioFolderUri).catch(() => []);
+      const uris = await scanAudioInDirectory(FileSystem.documentDirectory).catch(() => []);
       const nextTracks = uris
+        .filter((uri) => !uri.endsWith(`/${PLAYER_STATE_FILE_NAME}`))
         .map((uri) => ({
           id: uri,
           uri,
@@ -551,6 +548,43 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     await loadTracks();
   }, [audioFolderUri, loadTracks]);
 
+  const importFromFolder = useCallback(async () => {
+    if (!audioFolderUri) {
+      return;
+    }
+
+    let selectedDirectory: PickedDirectory | null = null;
+    try {
+      selectedDirectory = await Directory.pickDirectoryAsync();
+    } catch {
+      setMessage('Folder import is unavailable');
+      setTimeout(() => setMessage(null), 2500);
+      return;
+    }
+
+    if (!selectedDirectory) {
+      return;
+    }
+
+    const discoveredFiles = await scanPickedDirectoryForAudio(selectedDirectory).catch(() => []);
+    if (!discoveredFiles.length) {
+      setMessage('No audio files found in folder');
+      setTimeout(() => setMessage(null), 2500);
+      return;
+    }
+
+    let importedCount = 0;
+    for (const file of discoveredFiles) {
+      await copyFileIntoAudioFolder(file.uri, audioFolderUri, file.name);
+      importedCount += 1;
+    }
+
+    setMessage(`Imported ${importedCount} track${importedCount > 1 ? 's' : ''} from folder`);
+    setTimeout(() => setMessage(null), 2500);
+
+    await loadTracks();
+  }, [audioFolderUri, loadTracks]);
+
   const onSeekStart = useCallback(() => {
     setIsSeeking(true);
     setSeekMillis(positionMillis);
@@ -631,6 +665,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     seekMillis,
     loadTracks,
     importFromFiles,
+    importFromFolder,
     playTrack,
     playPrevious,
     playNext,
