@@ -1,10 +1,12 @@
 import Slider from '@react-native-community/slider';
 import { BlurView } from 'expo-blur';
-import { Animated, FlatList, Modal, PanResponder, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Animated, FlatList, Modal, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { getBackgroundTone } from '@/constants/backgrounds';
+import { useThemeMode } from '@/contexts/theme-mode-context';
 import { usePlayer } from '@/contexts/player-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -27,6 +29,7 @@ function formatCountdown(totalSeconds: number): string {
 export default function HomeScreen() {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
+  const { backgroundId } = useThemeMode();
   const insets = useSafeAreaInsets();
   const {
     activeTrack,
@@ -36,6 +39,7 @@ export default function HomeScreen() {
     durationMillis,
     playbackPercent,
     playbackRate,
+    playMode,
     sleepTimerMinutes,
     sleepSecondsLeft,
     sleepPreferenceMinutes,
@@ -46,6 +50,7 @@ export default function HomeScreen() {
     playTrack,
     playPrevious,
     playNext,
+    cyclePlayMode,
     changePlaybackRate,
     setSleepTimer,
     clearSleepTimer,
@@ -56,6 +61,15 @@ export default function HomeScreen() {
 
   const speedPercent = Math.round(playbackRate * 100);
   const sleepTimerOn = sleepSecondsLeft !== null;
+  const playModeIcon = useMemo(() => {
+    if (playMode === 'loop_all') {
+      return 'repeat' as const;
+    }
+    if (playMode === 'loop_one') {
+      return 'repeat.1' as const;
+    }
+    return 'shuffle' as const;
+  }, [playMode]);
   const [sheet, setSheet] = useState<'speed' | 'sleep' | null>(null);
   const [isMiniControl, setIsMiniControl] = useState(false);
   const backgroundListRef = useRef<FlatList<{ id: string; title: string; uri: string }> | null>(null);
@@ -178,19 +192,20 @@ export default function HomeScreen() {
   );
   const glassTint = isDark ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight';
   const sheetGlassTint = isDark ? 'systemThickMaterialDark' : 'systemThickMaterialLight';
+  const backgroundTone = getBackgroundTone(backgroundId, isDark);
 
-  const markMiniButtonTouch = () => {
+  const markControlButtonTouch = () => {
     ignoreMiniExpandRef.current = true;
   };
   const floatingBottom = Math.max(insets.bottom + 78, 92);
 
   const onControlDragRelease = useCallback(
     (dy: number) => {
-      if (dy > 28 && !isMiniControl) {
+      if (dy > 14 && !isMiniControl) {
         setIsMiniControl(true);
         return;
       }
-      if (dy < -28 && isMiniControl) {
+      if (dy < -20 && isMiniControl) {
         setIsMiniControl(false);
       }
     },
@@ -212,14 +227,18 @@ export default function HomeScreen() {
   );
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: palette.pageBg }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: backgroundTone.pageBg }]}>
       <View
         pointerEvents="none"
-        style={[styles.liquidBlob, styles.liquidBlobTop, { backgroundColor: isDark ? 'rgba(77,143,158,0.2)' : 'rgba(204,233,240,0.65)' }]}
+        style={[styles.liquidBlob, styles.liquidBlobTop, { backgroundColor: backgroundTone.blobTop }]}
       />
       <View
         pointerEvents="none"
-        style={[styles.liquidBlob, styles.liquidBlobBottom, { backgroundColor: isDark ? 'rgba(52,111,123,0.22)' : 'rgba(205,244,235,0.68)' }]}
+        style={[styles.liquidBlob, styles.liquidBlobBottom, { backgroundColor: backgroundTone.blobBottom }]}
+      />
+      <View
+        pointerEvents="none"
+        style={[styles.liquidBlob, styles.liquidBlobAccent, { backgroundColor: backgroundTone.blobAccent }]}
       />
 
       <FlatList
@@ -295,17 +314,17 @@ export default function HomeScreen() {
           ]}>
           <View
             style={[styles.floatingMask, isMiniControl ? styles.floatingMaskMini : undefined]}
-            onTouchEnd={
-              isMiniControl
-                ? () => {
-                    if (ignoreMiniExpandRef.current) {
-                      ignoreMiniExpandRef.current = false;
-                      return;
-                    }
-                    setIsMiniControl(false);
-                  }
-                : undefined
-            }>
+            onTouchEnd={() => {
+              if (ignoreMiniExpandRef.current) {
+                ignoreMiniExpandRef.current = false;
+                return;
+              }
+              if (isMiniControl) {
+                setIsMiniControl(false);
+                return;
+              }
+              setIsMiniControl(true);
+            }}>
             <BlurView
               intensity={60}
               tint={glassTint}
@@ -327,7 +346,7 @@ export default function HomeScreen() {
               {isMiniControl ? (
                 <View style={styles.transportRowMini}>
                   <Pressable
-                    onPressIn={markMiniButtonTouch}
+                    onPressIn={markControlButtonTouch}
                     onPress={() => void playPrevious()}
                     disabled={!tracks.length}
                     style={[
@@ -340,7 +359,7 @@ export default function HomeScreen() {
                   </Pressable>
                   <View style={[styles.playOrb, styles.playOrbMini]}>
                     <Pressable
-                      onPressIn={markMiniButtonTouch}
+                      onPressIn={markControlButtonTouch}
                       onPress={() => void togglePlayPause()}
                       disabled={!activeTrack}
                       style={[styles.playButton, styles.playButtonMini, !activeTrack && styles.buttonDisabled]}>
@@ -348,7 +367,7 @@ export default function HomeScreen() {
                     </Pressable>
                   </View>
                   <Pressable
-                    onPressIn={markMiniButtonTouch}
+                    onPressIn={markControlButtonTouch}
                     onPress={() => void playNext()}
                     disabled={!tracks.length}
                     style={[
@@ -375,7 +394,10 @@ export default function HomeScreen() {
                     minimumTrackTintColor={palette.accent}
                     maximumTrackTintColor={isDark ? '#5f747b' : '#c7d5d9'}
                     thumbTintColor={palette.accent}
-                    onSlidingStart={onSeekStart}
+                    onSlidingStart={() => {
+                      markControlButtonTouch();
+                      onSeekStart();
+                    }}
                     onValueChange={onSeekChange}
                     onSlidingComplete={(value) => void onSeekComplete(value)}
                   />
@@ -387,7 +409,8 @@ export default function HomeScreen() {
                     </View>
 
                   <View style={styles.transportRow}>
-                    <Pressable
+                      <Pressable
+                        onPressIn={markControlButtonTouch}
                         onPress={() => void playPrevious()}
                         disabled={!tracks.length}
                         style={[
@@ -398,14 +421,16 @@ export default function HomeScreen() {
                         <IconSymbol name="backward.fill" size={18} color={palette.transportIcon} />
                       </Pressable>
                     <View style={styles.playOrb}>
-                      <Pressable
-                        onPress={() => void togglePlayPause()}
+                        <Pressable
+                          onPressIn={markControlButtonTouch}
+                          onPress={() => void togglePlayPause()}
                         disabled={!activeTrack}
                         style={[styles.playButton, !activeTrack && styles.buttonDisabled]}>
                         <IconSymbol name={isPlaying ? 'pause.fill' : 'play.fill'} size={24} color="#ffffff" />
                       </Pressable>
                     </View>
                       <Pressable
+                        onPressIn={markControlButtonTouch}
                         onPress={() => void playNext()}
                         disabled={!tracks.length}
                         style={[
@@ -417,13 +442,21 @@ export default function HomeScreen() {
                       </Pressable>
                     </View>
 
-                    <View style={styles.modeButtonRow}>
+                  <View style={styles.modeButtonRow}>
                       <Pressable
+                        onPressIn={markControlButtonTouch}
+                        onPress={cyclePlayMode}
+                        style={[styles.modeIconButton, { borderColor: palette.modeBorder, backgroundColor: palette.modeBg }]}>
+                        <IconSymbol name={playModeIcon} size={16} color={palette.sheetText} />
+                      </Pressable>
+                      <Pressable
+                        onPressIn={markControlButtonTouch}
                         onPress={showSpeedSheet}
                         style={[styles.modeButton, { borderColor: palette.modeBorder, backgroundColor: palette.modeBg }]}>
                         <Text style={[styles.modeButtonText, { color: palette.sheetText }]}>Speed {speedPercent}%</Text>
                       </Pressable>
                       <Pressable
+                        onPressIn={markControlButtonTouch}
                         onPress={showSleepSheet}
                         style={[styles.modeButton, { borderColor: palette.modeBorder, backgroundColor: palette.modeBg }]}>
                         <Text style={[styles.modeButtonText, { color: palette.sheetText }]}>
@@ -561,6 +594,13 @@ const styles = StyleSheet.create({
     height: 320,
     bottom: 90,
     left: -140,
+  },
+  liquidBlobAccent: {
+    width: 240,
+    height: 240,
+    top: 300,
+    right: -80,
+    opacity: 0.62,
   },
   backgroundListContent: {
     paddingTop: 86,
@@ -747,6 +787,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginTop: 2,
+  },
+  modeIconButton: {
+    width: 42,
+    height: 42,
+    borderWidth: 1,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   modeButton: {
     flex: 1,

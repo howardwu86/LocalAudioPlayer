@@ -1,4 +1,5 @@
 import { AudioPlayer, createAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import { Asset } from 'expo-asset';
 import * as DocumentPicker from 'expo-document-picker';
 import { Directory } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -10,6 +11,8 @@ type Track = {
   uri: string;
 };
 
+export type PlayMode = 'loop_all' | 'loop_one' | 'shuffle';
+
 type PlayerContextValue = {
   tracks: Track[];
   loadingTracks: boolean;
@@ -20,6 +23,7 @@ type PlayerContextValue = {
   durationMillis: number;
   playbackPercent: number;
   playbackRate: number;
+  playMode: PlayMode;
   sleepTimerMinutes: number | null;
   sleepSecondsLeft: number | null;
   sleepPreferenceMinutes: number;
@@ -33,6 +37,7 @@ type PlayerContextValue = {
   playTrack: (track: Track) => Promise<void>;
   playPrevious: () => Promise<void>;
   playNext: () => Promise<void>;
+  cyclePlayMode: () => void;
   togglePlayPause: () => Promise<void>;
   changePlaybackRate: (rate: number) => Promise<void>;
   setSleepTimer: (minutes: number) => void;
@@ -53,14 +58,16 @@ const MIN_SLEEP_MINUTES = 1;
 const MAX_SLEEP_MINUTES = 720;
 const DEFAULT_PLAYBACK_RATE = 1;
 const DEFAULT_SLEEP_PREFERENCE_MINUTES = 15;
+const DEFAULT_PLAY_MODE: PlayMode = 'loop_all';
 
 type PersistedPlayerState = {
-  version: 4;
+  version: 6;
   activeTrackId: string | null;
   positionMillis: number;
   durationMillis: number;
   playbackRate: number;
   sleepPreferenceMinutes: number;
+  playMode: PlayMode;
 };
 
 type PickedDirectory = Awaited<ReturnType<typeof Directory.pickDirectoryAsync>>;
@@ -72,6 +79,12 @@ type LockScreenCapablePlayer = AudioPlayer & {
     options?: { showSeekForward?: boolean; showSeekBackward?: boolean }
   ) => void;
   clearLockScreenControls?: () => void;
+  updateLockScreenMetadata?: (metadata: {
+    title?: string;
+    artist?: string;
+    albumTitle?: string;
+    artworkUrl?: string;
+  }) => void;
 };
 
 function getExtension(uri: string): string {
@@ -200,21 +213,37 @@ async function readPersistedState(): Promise<PersistedPlayerState | null> {
 
   try {
     const raw = await FileSystem.readAsStringAsync(stateUri);
-    const parsed = JSON.parse(raw) as Partial<PersistedPlayerState> & { version?: number };
-    const hasNewPrefs = parsed.version === 4;
+    const parsed = JSON.parse(raw) as {
+      version?: number;
+      activeTrackId?: string | null;
+      positionMillis?: number;
+      durationMillis?: number;
+      playbackRate?: number;
+      sleepPreferenceMinutes?: number;
+      playMode?: PlayMode;
+    };
+    const hasPrefs = parsed.version === 4 || parsed.version === 5 || parsed.version === 6;
+    const hasPlayMode = parsed.version === 5 || parsed.version === 6;
+    const parsedPlayMode =
+      parsed.playMode === 'loop_all' ||
+      parsed.playMode === 'loop_one' ||
+      parsed.playMode === 'shuffle'
+        ? parsed.playMode
+        : DEFAULT_PLAY_MODE;
     return {
-      version: 4,
+      version: 6,
       activeTrackId: parsed.activeTrackId ?? null,
       positionMillis: Math.max(0, parsed.positionMillis ?? 0),
       durationMillis: Math.max(0, parsed.durationMillis ?? 0),
       playbackRate: clampPlaybackRate(
-        hasNewPrefs ? (parsed.playbackRate ?? DEFAULT_PLAYBACK_RATE) : DEFAULT_PLAYBACK_RATE
+        hasPrefs ? (parsed.playbackRate ?? DEFAULT_PLAYBACK_RATE) : DEFAULT_PLAYBACK_RATE
       ),
       sleepPreferenceMinutes: clampSleepMinutes(
-        hasNewPrefs
+        hasPrefs
           ? (parsed.sleepPreferenceMinutes ?? DEFAULT_SLEEP_PREFERENCE_MINUTES)
           : DEFAULT_SLEEP_PREFERENCE_MINUTES
       ),
+      playMode: hasPlayMode ? parsedPlayMode : DEFAULT_PLAY_MODE,
     };
   } catch {
     return null;
@@ -236,16 +265,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playNextRef = useRef<(() => Promise<void>) | null>(null);
+  const playNextAutoRef = useRef<(() => Promise<void>) | null>(null);
+  const lockScreenArtworkUrlRef = useRef<string | undefined>(undefined);
   const hasTriedRestoreRef = useRef(false);
   const persistedStateRef = useRef<PersistedPlayerState | null>(null);
   const lastPersistRef = useRef(0);
   const latestStateRef = useRef<PersistedPlayerState>({
-    version: 4,
+    version: 6,
     activeTrackId: null,
     positionMillis: 0,
     durationMillis: 0,
     playbackRate: DEFAULT_PLAYBACK_RATE,
     sleepPreferenceMinutes: DEFAULT_SLEEP_PREFERENCE_MINUTES,
+    playMode: DEFAULT_PLAY_MODE,
   });
 
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -255,6 +287,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [positionMillis, setPositionMillis] = useState(0);
   const [durationMillis, setDurationMillis] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(DEFAULT_PLAYBACK_RATE);
+  const [playMode, setPlayMode] = useState<PlayMode>(DEFAULT_PLAY_MODE);
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(null);
   const [sleepSecondsLeft, setSleepSecondsLeft] = useState<number | null>(null);
   const [sleepPreferenceMinutes, setSleepPreferenceMinutes] = useState(DEFAULT_SLEEP_PREFERENCE_MINUTES);
@@ -336,6 +369,27 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    const loadArtwork = async () => {
+      try {
+        const artwork = Asset.fromModule(require('../assets/images/icon.png'));
+        if (!artwork.localUri) {
+          await artwork.downloadAsync();
+        }
+        if (mounted) {
+          lockScreenArtworkUrlRef.current = artwork.localUri ?? artwork.uri;
+        }
+      } catch {
+        // No-op: lock screen metadata can still work without artwork.
+      }
+    };
+    void loadArtwork();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
     const loadPersisted = async () => {
       const state = await readPersistedState();
       if (mounted) {
@@ -343,6 +397,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         if (state) {
           setPlaybackRate(state.playbackRate);
           setSleepPreferenceMinutes(state.sleepPreferenceMinutes);
+          setPlayMode(state.playMode);
         }
         setPersistedReady(true);
       }
@@ -425,12 +480,22 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
             title: track.title,
             artist: 'Local Audio Player',
             albumTitle: 'On My iPhone',
+            artworkUrl: lockScreenArtworkUrlRef.current,
           },
           {
             showSeekForward: true,
             showSeekBackward: true,
           }
         );
+      }
+
+      if (typeof lockScreenPlayer.updateLockScreenMetadata === 'function') {
+        lockScreenPlayer.updateLockScreenMetadata({
+          title: track.title,
+          artist: 'Local Audio Player',
+          albumTitle: 'On My iPhone',
+          artworkUrl: lockScreenArtworkUrlRef.current,
+        });
       }
 
       playbackSubRef.current = player.addListener('playbackStatusUpdate', (status) => {
@@ -445,7 +510,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setDurationMillis(Math.max(0, Math.round((status.duration ?? 0) * 1000)));
 
         if (status.didJustFinish && !status.loop) {
-          const triggerNext = playNextRef.current;
+          const triggerNext = playNextAutoRef.current;
           if (triggerNext) {
             void triggerNext();
           }
@@ -468,37 +533,112 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (tracks.length === 0) {
         return;
       }
-      const normalizedIndex = ((index % tracks.length) + tracks.length) % tracks.length;
-      await playTrack(tracks[normalizedIndex], 0);
+      if (index < 0 || index >= tracks.length) {
+        return;
+      }
+      await playTrack(tracks[index], 0);
     },
     [playTrack, tracks]
+  );
+
+  const pickRandomIndex = useCallback(
+    (excludeIndex: number | null = null) => {
+      if (!tracks.length) {
+        return -1;
+      }
+      if (tracks.length === 1) {
+        return 0;
+      }
+      let randomIndex = Math.floor(Math.random() * tracks.length);
+      while (excludeIndex !== null && randomIndex === excludeIndex) {
+        randomIndex = Math.floor(Math.random() * tracks.length);
+      }
+      return randomIndex;
+    },
+    [tracks]
   );
 
   const playPrevious = useCallback(async () => {
     if (!tracks.length) {
       return;
     }
-    if (activeTrackIndex < 0) {
+    if (playMode === 'shuffle') {
+      const randomIndex = pickRandomIndex(activeTrackIndex >= 0 ? activeTrackIndex : null);
+      if (randomIndex >= 0) {
+        await playTrackByIndex(randomIndex);
+      }
+      return;
+    }
+    if (activeTrackIndex <= 0) {
       await playTrackByIndex(0);
       return;
     }
     await playTrackByIndex(activeTrackIndex - 1);
-  }, [activeTrackIndex, playTrackByIndex, tracks.length]);
+  }, [activeTrackIndex, pickRandomIndex, playMode, playTrackByIndex, tracks.length]);
+
+  const playNextWithMode = useCallback(
+    async (autoAdvance: boolean) => {
+      if (!tracks.length) {
+        return;
+      }
+
+      if (playMode === 'loop_one' && autoAdvance) {
+        if (activeTrack) {
+          await playTrack(activeTrack, 0);
+        } else {
+          await playTrackByIndex(0);
+        }
+        return;
+      }
+
+      if (playMode === 'shuffle') {
+        const randomIndex = pickRandomIndex(activeTrackIndex >= 0 ? activeTrackIndex : null);
+        if (randomIndex >= 0) {
+          await playTrackByIndex(randomIndex);
+        }
+        return;
+      }
+
+      if (activeTrackIndex < 0) {
+        await playTrackByIndex(0);
+        return;
+      }
+
+      const nextIndex = activeTrackIndex + 1;
+      if (nextIndex >= tracks.length) {
+        await playTrackByIndex(0);
+        return;
+      }
+
+      await playTrackByIndex(nextIndex);
+    },
+    [activeTrack, activeTrackIndex, pickRandomIndex, playMode, playTrack, playTrackByIndex, tracks.length]
+  );
 
   const playNext = useCallback(async () => {
-    if (!tracks.length) {
-      return;
-    }
-    if (activeTrackIndex < 0) {
-      await playTrackByIndex(0);
-      return;
-    }
-    await playTrackByIndex(activeTrackIndex + 1);
-  }, [activeTrackIndex, playTrackByIndex, tracks.length]);
+    await playNextWithMode(false);
+  }, [playNextWithMode]);
+
+  const playNextAuto = useCallback(async () => {
+    await playNextWithMode(true);
+  }, [playNextWithMode]);
 
   useEffect(() => {
     playNextRef.current = playNext;
-  }, [playNext]);
+    playNextAutoRef.current = playNextAuto;
+  }, [playNext, playNextAuto]);
+
+  const cyclePlayMode = useCallback(() => {
+    setPlayMode((current) => {
+      if (current === 'loop_all') {
+        return 'loop_one';
+      }
+      if (current === 'loop_one') {
+        return 'shuffle';
+      }
+      return 'loop_all';
+    });
+  }, []);
 
   const togglePlayPause = useCallback(async () => {
     const currentPlayer = playerRef.current;
@@ -672,25 +812,27 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     lastPersistRef.current = now;
 
     void writePersistedState({
-      version: 4,
+      version: 6,
       activeTrackId,
       positionMillis,
       durationMillis,
       playbackRate,
       sleepPreferenceMinutes,
+      playMode,
     });
-  }, [activeTrackId, positionMillis, durationMillis, playbackRate, sleepPreferenceMinutes]);
+  }, [activeTrackId, positionMillis, durationMillis, playbackRate, sleepPreferenceMinutes, playMode]);
 
   useEffect(() => {
     latestStateRef.current = {
-      version: 4,
+      version: 6,
       activeTrackId,
       positionMillis,
       durationMillis,
       playbackRate,
       sleepPreferenceMinutes,
+      playMode,
     };
-  }, [activeTrackId, durationMillis, playbackRate, positionMillis, sleepPreferenceMinutes]);
+  }, [activeTrackId, durationMillis, playbackRate, positionMillis, sleepPreferenceMinutes, playMode]);
 
   useEffect(() => {
     return () => {
@@ -724,6 +866,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     durationMillis,
     playbackPercent,
     playbackRate,
+    playMode,
     sleepTimerMinutes,
     sleepSecondsLeft,
     sleepPreferenceMinutes,
@@ -737,6 +880,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     playTrack,
     playPrevious,
     playNext,
+    cyclePlayMode,
     togglePlayPause,
     changePlaybackRate,
     setSleepTimer,

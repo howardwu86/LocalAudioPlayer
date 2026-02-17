@@ -1,10 +1,12 @@
-import { ActivityIndicator, Alert, FlatList, PanResponder, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { getBackgroundTone } from '@/constants/backgrounds';
 import { usePlayer } from '@/contexts/player-context';
-import { ThemeMode, useThemeMode } from '@/contexts/theme-mode-context';
+import { useThemeMode } from '@/contexts/theme-mode-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 const TRACK_ROW_HEIGHT = 58;
@@ -12,7 +14,7 @@ const TRACK_ROW_HEIGHT = 58;
 export default function FilesScreen() {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const { mode, setMode } = useThemeMode();
+  const { backgroundId } = useThemeMode();
   const router = useRouter();
   const { tracks, loadingTracks, activeTrackId, playTrack, importFromFiles, importFromFolder, deleteTracks, loadTracks, message } =
     usePlayer();
@@ -61,6 +63,7 @@ export default function FilesScreen() {
         message: '#0f766e',
       };
   const glassTint = isDark ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight';
+  const backgroundTone = getBackgroundTone(backgroundId, isDark);
 
   const getIndexFromY = useCallback(
     (localY: number) => {
@@ -204,43 +207,22 @@ export default function FilesScreen() {
   }, [tracks]);
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: palette.pageBg }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: backgroundTone.pageBg }]}>
       <View
         pointerEvents="none"
-        style={[styles.liquidBlob, styles.liquidBlobTop, { backgroundColor: isDark ? 'rgba(77,143,158,0.2)' : 'rgba(204,233,240,0.65)' }]}
+        style={[styles.liquidBlob, styles.liquidBlobTop, { backgroundColor: backgroundTone.blobTop }]}
       />
       <View
         pointerEvents="none"
-        style={[styles.liquidBlob, styles.liquidBlobBottom, { backgroundColor: isDark ? 'rgba(52,111,123,0.22)' : 'rgba(205,244,235,0.68)' }]}
+        style={[styles.liquidBlob, styles.liquidBlobBottom, { backgroundColor: backgroundTone.blobBottom }]}
+      />
+      <View
+        pointerEvents="none"
+        style={[styles.liquidBlob, styles.liquidBlobAccent, { backgroundColor: backgroundTone.blobAccent }]}
       />
 
       <View style={styles.headerRow}>
         <Text style={[styles.title, { color: palette.title }]}>Files</Text>
-      </View>
-
-      <View style={styles.themeModeRow}>
-        <Text style={[styles.themeModeLabel, { color: palette.sectionTitle }]}>Theme</Text>
-        <View style={styles.themeModeOptions}>
-          {(['system', 'light', 'dark'] as ThemeMode[]).map((option) => {
-            const active = mode === option;
-            return (
-              <Pressable
-                key={option}
-                onPress={() => setMode(option)}
-                style={[
-                  styles.themeModeButton,
-                  {
-                    borderColor: active ? palette.itemActiveBorder : palette.outlineButtonBorder,
-                    backgroundColor: active ? palette.itemActiveBg : palette.outlineButtonBg,
-                  },
-                ]}>
-                <Text style={[styles.themeModeButtonText, { color: palette.outlineText }]}>
-                  {option === 'system' ? 'System' : option === 'light' ? 'Light' : 'Dark'}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
       </View>
 
       <View style={styles.actionsRow}>
@@ -284,81 +266,90 @@ export default function FilesScreen() {
 
       {message ? <Text style={[styles.messageText, { color: palette.message }]}>{message}</Text> : null}
 
-      <BlurView
-        intensity={62}
-        tint={glassTint}
-        style={[styles.playlistCard, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={[styles.sectionLabel, { color: palette.sectionTitle }]}>Playlist ({tracks.length})</Text>
-          <View style={styles.sectionHeaderActions}>
-            <Pressable onPress={handleSelectPress} style={styles.sectionHeaderButton}>
-              <Text style={[styles.sectionHeaderButtonText, { color: palette.outlineText }]}>
-                {selectionMode ? 'Done' : 'Select'}
-              </Text>
-            </Pressable>
-            <Pressable onPress={handleSelectAllPress} style={styles.sectionHeaderButton}>
-              <Text style={[styles.sectionHeaderButtonText, { color: palette.outlineText }]}>Select All</Text>
-            </Pressable>
-          </View>
-        </View>
-
-        {loadingTracks ? (
-          <View style={styles.centered}>
-            <ActivityIndicator color={palette.message} />
-            <Text style={[styles.helperText, { color: palette.subtle }]}>Scanning tracks...</Text>
-          </View>
-        ) : null}
-
-        {!loadingTracks && tracks.length === 0 ? (
-          <Text style={[styles.helperText, { color: palette.subtle }]}>No tracks found yet.</Text>
-        ) : null}
-
-        <View style={styles.playlistTouchArea} {...selectionPanResponder.panHandlers}>
-          <FlatList
-            data={tracks}
-            keyExtractor={(item) => item.id}
-            showsVerticalScrollIndicator
-            refreshing={loadingTracks}
-            onRefresh={() => void loadTracks()}
-            getItemLayout={(_, index) => ({
-              length: TRACK_ROW_HEIGHT,
-              offset: TRACK_ROW_HEIGHT * index,
-              index,
-            })}
-            onScroll={(event) => {
-              setScrollOffset(event.nativeEvent.contentOffset.y);
-            }}
-            scrollEventThrottle={16}
-            renderItem={({ item, index }) => {
-              const isSelected = selectedIds.has(item.id);
-              return (
-                <Pressable
-                  onLongPress={() => beginSelectionAtIndex(index)}
-                  onPress={() => {
-                    if (selectionMode) {
-                      toggleSelection(item.id);
-                      return;
-                    }
-                    void playTrack(item);
-                    router.navigate('/(tabs)');
-                  }}
-                  style={[
-                    styles.trackItem,
-                    { backgroundColor: palette.itemBg, borderColor: palette.itemBorder },
-                    item.id === activeTrackId
-                      ? { borderColor: palette.itemActiveBorder, backgroundColor: palette.itemActiveBg }
-                      : undefined,
-                    isSelected ? styles.trackItemSelected : undefined,
-                  ]}>
-                  <Text style={[styles.trackTitle, { color: palette.itemText }]} numberOfLines={1}>
-                    {item.title}
+      <View style={styles.playlistShell}>
+        <View style={styles.playlistMask}>
+          <BlurView
+            intensity={62}
+            tint={glassTint}
+            style={[styles.playlistCard, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionLabel, { color: palette.sectionTitle }]}>Playlist ({tracks.length})</Text>
+              <View style={styles.sectionHeaderActions}>
+                <Pressable onPress={handleSelectPress} style={styles.sectionHeaderButton}>
+                  <Text style={[styles.sectionHeaderButtonText, { color: palette.outlineText }]}>
+                    {selectionMode ? 'Done' : 'Select'}
                   </Text>
                 </Pressable>
-              );
-            }}
-          />
+                <Pressable onPress={handleSelectAllPress} style={styles.sectionHeaderButton}>
+                  <Text style={[styles.sectionHeaderButtonText, { color: palette.outlineText }]}>Select All</Text>
+                </Pressable>
+              </View>
+            </View>
+
+            {loadingTracks ? (
+              <View style={styles.centered}>
+                <ActivityIndicator color={palette.message} />
+                <Text style={[styles.helperText, { color: palette.subtle }]}>Scanning tracks...</Text>
+              </View>
+            ) : null}
+
+            <View
+              style={styles.playlistTouchArea}
+              {...(selectionMode ? selectionPanResponder.panHandlers : {})}>
+              <FlatList
+                data={tracks}
+                keyExtractor={(item) => item.id}
+                showsVerticalScrollIndicator
+                refreshing={loadingTracks}
+                onRefresh={() => void loadTracks()}
+                alwaysBounceVertical
+                contentContainerStyle={tracks.length === 0 ? styles.emptyListContent : undefined}
+                ListEmptyComponent={
+                  !loadingTracks ? (
+                    <Text style={[styles.helperText, { color: palette.subtle }]}>No tracks found yet.</Text>
+                  ) : null
+                }
+                getItemLayout={(_, index) => ({
+                  length: TRACK_ROW_HEIGHT,
+                  offset: TRACK_ROW_HEIGHT * index,
+                  index,
+                })}
+                onScroll={(event) => {
+                  setScrollOffset(event.nativeEvent.contentOffset.y);
+                }}
+                scrollEventThrottle={16}
+                renderItem={({ item, index }) => {
+                  const isSelected = selectedIds.has(item.id);
+                  return (
+                    <Pressable
+                      onLongPress={() => beginSelectionAtIndex(index)}
+                      onPress={() => {
+                        if (selectionMode) {
+                          toggleSelection(item.id);
+                          return;
+                        }
+                        void playTrack(item);
+                        router.navigate('/(tabs)');
+                      }}
+                      style={[
+                        styles.trackItem,
+                        { backgroundColor: palette.itemBg, borderColor: palette.itemBorder },
+                        item.id === activeTrackId
+                          ? { borderColor: palette.itemActiveBorder, backgroundColor: palette.itemActiveBg }
+                          : undefined,
+                        isSelected ? styles.trackItemSelected : undefined,
+                      ]}>
+                      <Text style={[styles.trackTitle, { color: palette.itemText }]} numberOfLines={1}>
+                        {item.title}
+                      </Text>
+                    </Pressable>
+                  );
+                }}
+              />
+            </View>
+          </BlurView>
         </View>
-      </BlurView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -385,6 +376,13 @@ const styles = StyleSheet.create({
     bottom: 110,
     left: -130,
   },
+  liquidBlobAccent: {
+    width: 230,
+    height: 230,
+    top: 290,
+    right: -90,
+    opacity: 0.62,
+  },
   headerRow: {
     marginTop: 8,
     marginBottom: 10,
@@ -401,33 +399,6 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 8,
     paddingHorizontal: 6,
-  },
-  themeModeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-    paddingHorizontal: 6,
-    gap: 8,
-  },
-  themeModeLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  themeModeOptions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  themeModeButton: {
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-  },
-  themeModeButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
   },
   actionButton: {
     borderRadius: 12,
@@ -464,14 +435,27 @@ const styles = StyleSheet.create({
   },
   playlistCard: {
     flex: 1,
-    marginBottom: 10,
     borderRadius: 18,
     borderWidth: 1,
     padding: 14,
     gap: 10,
   },
+  playlistShell: {
+    flex: 1,
+    marginBottom: 10,
+    borderRadius: 18,
+  },
+  playlistMask: {
+    flex: 1,
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
   playlistTouchArea: {
     flex: 1,
+  },
+  emptyListContent: {
+    flexGrow: 1,
+    justifyContent: 'flex-start',
   },
   sectionLabel: {
     fontSize: 15,
