@@ -266,6 +266,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playNextRef = useRef<(() => Promise<void>) | null>(null);
   const playNextAutoRef = useRef<(() => Promise<void>) | null>(null);
+  const playRequestIdRef = useRef(0);
   const lockScreenArtworkUrlRef = useRef<string | undefined>(undefined);
   const hasTriedRestoreRef = useRef(false);
   const persistedStateRef = useRef<PersistedPlayerState | null>(null);
@@ -459,10 +460,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const playTrack = useCallback(
     async (track: Track, startPositionMillis = 0) => {
+      const requestId = playRequestIdRef.current + 1;
+      playRequestIdRef.current = requestId;
+
       const existingPlayer = playerRef.current as LockScreenCapablePlayer | null;
       if (existingPlayer) {
         playbackSubRef.current?.remove();
         playbackSubRef.current = null;
+        existingPlayer.pause();
         if (typeof existingPlayer.clearLockScreenControls === 'function') {
           existingPlayer.clearLockScreenControls();
         }
@@ -498,7 +503,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      playbackSubRef.current = player.addListener('playbackStatusUpdate', (status) => {
+      const playbackSub = player.addListener('playbackStatusUpdate', (status) => {
         if (!status.isLoaded) {
           return;
         }
@@ -517,11 +522,37 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }
       });
 
+      if (requestId !== playRequestIdRef.current) {
+        playbackSub.remove();
+        if (typeof lockScreenPlayer.clearLockScreenControls === 'function') {
+          lockScreenPlayer.clearLockScreenControls();
+        }
+        player.remove();
+        return;
+      }
+
+      playbackSubRef.current = playbackSub;
       playerRef.current = player;
       setActiveTrackId(track.id);
       if (startPositionMillis > 0) {
         await player.seekTo(startPositionMillis / 1000);
       }
+
+      if (requestId !== playRequestIdRef.current) {
+        if (playbackSubRef.current === playbackSub) {
+          playbackSubRef.current = null;
+        }
+        playbackSub.remove();
+        if (playerRef.current === player) {
+          playerRef.current = null;
+        }
+        if (typeof lockScreenPlayer.clearLockScreenControls === 'function') {
+          lockScreenPlayer.clearLockScreenControls();
+        }
+        player.remove();
+        return;
+      }
+
       setPositionMillis(Math.max(0, startPositionMillis));
       player.play();
     },
