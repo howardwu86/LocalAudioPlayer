@@ -484,14 +484,16 @@ export default function HomeScreen() {
                       <Pressable
                         onPressIn={markControlButtonTouch}
                         onPress={showSpeedSheet}
-                        style={[styles.modeButton, { borderColor: palette.modeBorder, backgroundColor: palette.modeBg }]}>
-                        <Text style={[styles.modeButtonText, { color: palette.sheetText }]}>Speed {speedRate.toFixed(2)}x</Text>
+                        style={[styles.modeButton, styles.modeButtonSpeed, { borderColor: palette.modeBorder, backgroundColor: palette.modeBg }]}>
+                        <Text numberOfLines={1} style={[styles.modeButtonText, { color: palette.sheetText }]}>
+                          Speed {speedRate.toFixed(2)}x
+                        </Text>
                       </Pressable>
                       <Pressable
                         onPressIn={markControlButtonTouch}
                         onPress={showSleepSheet}
-                        style={[styles.modeButton, { borderColor: palette.modeBorder, backgroundColor: palette.modeBg }]}>
-                        <Text style={[styles.modeButtonText, { color: palette.sheetText }]}>
+                        style={[styles.modeButton, styles.modeButtonSleep, { borderColor: palette.modeBorder, backgroundColor: palette.modeBg }]}>
+                        <Text numberOfLines={1} style={[styles.modeButtonText, { color: palette.sheetText }]}>
                           Sleep Timer {sleepSecondsLeft !== null ? formatCountdown(sleepSecondsLeft) : `${sleepPreferenceMinutes}m`}
                         </Text>
                       </Pressable>
@@ -654,7 +656,7 @@ export default function HomeScreen() {
             <Pressable
               style={[styles.cancelButton, { backgroundColor: palette.sheetBg, borderColor: palette.sheetBorder }]}
               onPress={() => setSheet(null)}>
-              <Text style={[styles.cancelText, { color: palette.accent }]}>{sheet === 'speed' ? 'Done' : 'Cancel'}</Text>
+              <Text style={[styles.cancelText, { color: palette.accent }]}>Done</Text>
             </Pressable>
           </View>
         </View>
@@ -887,15 +889,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   modeButton: {
-    flex: 1,
     borderWidth: 1,
     borderRadius: 14,
     paddingVertical: 10,
     paddingHorizontal: 12,
   },
+  modeButtonSpeed: {
+    flex: 0.85,
+  },
+  modeButtonSleep: {
+    flex: 1.15,
+  },
   modeButtonText: {
     fontWeight: '700',
     fontSize: 13,
+    textAlign: 'center',
   },
   sheetOverlay: {
     flex: 1,

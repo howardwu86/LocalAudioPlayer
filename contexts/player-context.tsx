@@ -52,6 +52,7 @@ const PlayerContext = createContext<PlayerContextValue | undefined>(undefined);
 const AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'wav', 'aac', 'caf', 'aiff', 'flac']);
 const APP_AUDIO_FOLDER_NAME = 'audio';
 const PLAYER_STATE_FILE_NAME = 'player-state.json';
+const SAMPLE_SEED_FILE_NAME = 'sample-seed-v1.json';
 const MIN_PLAYBACK_RATE = 0.5;
 const MAX_PLAYBACK_RATE = 2.0;
 const MIN_SLEEP_MINUTES = 1;
@@ -59,6 +60,10 @@ const MAX_SLEEP_MINUTES = 720;
 const DEFAULT_PLAYBACK_RATE = 1;
 const DEFAULT_SLEEP_PREFERENCE_MINUTES = 15;
 const DEFAULT_PLAY_MODE: PlayMode = 'loop_all';
+const BUNDLED_SAMPLE_TRACKS: Array<{ assetModule: number; fileName: string }> = [
+  { assetModule: require('../assets/audio/sample-music.wav'), fileName: 'Sample Music.wav' },
+  { assetModule: require('../assets/audio/sample-audio.wav'), fileName: 'Sample Audio.wav' },
+];
 
 type PersistedPlayerState = {
   version: 6;
@@ -184,6 +189,65 @@ function getPlayerStateUri(): string | null {
     return null;
   }
   return joinUri(FileSystem.documentDirectory, PLAYER_STATE_FILE_NAME);
+}
+
+function getSampleSeedUri(): string | null {
+  if (!FileSystem.documentDirectory) {
+    return null;
+  }
+  return joinUri(FileSystem.documentDirectory, SAMPLE_SEED_FILE_NAME);
+}
+
+async function ensureBundledSamples(audioFolderUri: string): Promise<number> {
+  const sampleSeedUri = getSampleSeedUri();
+  if (!sampleSeedUri) {
+    return 0;
+  }
+
+  const seedInfo = await FileSystem.getInfoAsync(sampleSeedUri);
+  if (seedInfo.exists) {
+    return 0;
+  }
+
+  let importedCount = 0;
+  for (const sample of BUNDLED_SAMPLE_TRACKS) {
+    const targetUri = joinUri(audioFolderUri, sample.fileName);
+    const targetInfo = await FileSystem.getInfoAsync(targetUri);
+    if (targetInfo.exists) {
+      continue;
+    }
+
+    try {
+      const asset = Asset.fromModule(sample.assetModule);
+      if (!asset.localUri) {
+        await asset.downloadAsync();
+      }
+      const sourceUri = asset.localUri ?? asset.uri;
+      await FileSystem.copyAsync({
+        from: sourceUri,
+        to: targetUri,
+      });
+      importedCount += 1;
+    } catch {
+      // Best effort: if copy fails, the app can still function without sample media.
+    }
+  }
+
+  const sampleExistence = await Promise.all(
+    BUNDLED_SAMPLE_TRACKS.map((sample) => FileSystem.getInfoAsync(joinUri(audioFolderUri, sample.fileName)))
+  );
+  const allSamplesPresent = sampleExistence.every((info) => info.exists);
+  if (allSamplesPresent) {
+    await FileSystem.writeAsStringAsync(
+      sampleSeedUri,
+      JSON.stringify({
+        version: 1,
+        seededAt: new Date().toISOString(),
+      })
+    );
+  }
+
+  return importedCount;
 }
 
 function clampPlaybackRate(rate: number): number {
@@ -419,9 +483,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const appAudioFolderUri = joinUri(FileSystem.documentDirectory, APP_AUDIO_FOLDER_NAME);
+      const appRootUri = FileSystem.documentDirectory;
+      const appAudioFolderUri = joinUri(appRootUri, APP_AUDIO_FOLDER_NAME);
       setAudioFolderUri(appAudioFolderUri);
       await FileSystem.makeDirectoryAsync(appAudioFolderUri, { intermediates: true });
+      const seededCount = await ensureBundledSamples(appRootUri);
+      if (seededCount > 0) {
+        setMessage(`Added ${seededCount} sample track${seededCount > 1 ? 's' : ''}`);
+        setTimeout(() => setMessage(null), 2500);
+      }
       const uris = await scanAudioInDirectory(FileSystem.documentDirectory).catch(() => []);
       const nextTracks = uris
         .filter((uri) => !uri.endsWith(`/${PLAYER_STATE_FILE_NAME}`))
