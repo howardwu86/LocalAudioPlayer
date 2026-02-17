@@ -10,8 +10,14 @@ import { useThemeMode } from '@/contexts/theme-mode-context';
 import { usePlayer } from '@/contexts/player-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
-const SPEED_PRESETS = [80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130] as const;
-const SLEEP_PRESETS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60] as const;
+const SPEED_MIN = 0.5;
+const SPEED_MAX = 2.0;
+const SPEED_STEP = 0.05;
+const SPEED_PRESET_LABELS = [0.75, 1.0, 1.25, 1.5, 2.0] as const;
+const SLEEP_MINUTES_MIN = 5;
+const SLEEP_MINUTES_MAX = 60;
+const SLEEP_MINUTES_STEP = 5;
+const SLEEP_PRESET_LABELS = [5, 10, 15, 30, 60] as const;
 
 function formatMillis(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -24,6 +30,16 @@ function formatCountdown(totalSeconds: number): string {
   const mins = Math.floor(totalSeconds / 60);
   const secs = totalSeconds % 60;
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function formatPresetSpeedLabel(rate: number): string {
+  if (Number.isInteger(rate)) {
+    return rate.toFixed(1);
+  }
+  if (Number.isInteger(rate * 10)) {
+    return rate.toFixed(1);
+  }
+  return rate.toFixed(2);
 }
 
 export default function HomeScreen() {
@@ -59,8 +75,9 @@ export default function HomeScreen() {
     onSeekComplete,
   } = usePlayer();
 
-  const speedPercent = Math.round(playbackRate * 100);
+  const speedRate = Number(playbackRate.toFixed(2));
   const sleepTimerOn = sleepSecondsLeft !== null;
+  const sleepMinutesValue = sleepTimerOn ? (sleepTimerMinutes ?? sleepPreferenceMinutes) : sleepPreferenceMinutes;
   const playModeIcon = useMemo(() => {
     if (playMode === 'loop_all') {
       return 'repeat' as const;
@@ -132,6 +149,21 @@ export default function HomeScreen() {
   const showSleepSheet = () => {
     setSheet('sleep');
   };
+  const setSpeedRate = useCallback(
+    (rate: number) => {
+      const clamped = Math.min(SPEED_MAX, Math.max(SPEED_MIN, Number(rate.toFixed(2))));
+      void changePlaybackRate(clamped);
+    },
+    [changePlaybackRate]
+  );
+  const setSleepMinutesValue = useCallback(
+    (minutes: number) => {
+      const rounded = Math.round(minutes / SLEEP_MINUTES_STEP) * SLEEP_MINUTES_STEP;
+      const clamped = Math.min(SLEEP_MINUTES_MAX, Math.max(SLEEP_MINUTES_MIN, rounded));
+      setSleepTimer(clamped);
+    },
+    [setSleepTimer]
+  );
 
   const palette = useMemo(
     () =>
@@ -453,7 +485,7 @@ export default function HomeScreen() {
                         onPressIn={markControlButtonTouch}
                         onPress={showSpeedSheet}
                         style={[styles.modeButton, { borderColor: palette.modeBorder, backgroundColor: palette.modeBg }]}>
-                        <Text style={[styles.modeButtonText, { color: palette.sheetText }]}>Speed {speedPercent}%</Text>
+                        <Text style={[styles.modeButtonText, { color: palette.sheetText }]}>Speed {speedRate.toFixed(2)}x</Text>
                       </Pressable>
                       <Pressable
                         onPressIn={markControlButtonTouch}
@@ -483,27 +515,56 @@ export default function HomeScreen() {
                 {sheet === 'speed' ? (
                   <>
                     <Text style={[styles.sheetTitle, { color: palette.sheetSubtle }]}>Playback Speed</Text>
-                    <View style={styles.sheetOptionsGrid}>
-                      {SPEED_PRESETS.map((preset) => {
-                        const active = preset === speedPercent;
-                        return (
-                          <Pressable
-                            key={preset}
-                            onPress={() => {
-                              void changePlaybackRate(preset / 100);
-                              setSheet(null);
-                            }}
-                            style={[
-                              styles.sheetPill,
-                              { borderColor: palette.sheetBorder, backgroundColor: isDark ? 'rgba(30,49,56,0.7)' : 'rgba(255,255,255,0.65)' },
-                              active && { borderColor: palette.sheetActiveBorder, backgroundColor: palette.sheetActiveBg },
-                            ]}>
-                            <Text style={[styles.sheetPillText, { color: palette.sheetText }, active && { color: palette.sheetActiveBorder }]}>
-                              {preset}%
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
+                    <View style={styles.speedControlWrap}>
+                      <Text style={[styles.speedValueText, { color: palette.sheetText }]}>{speedRate.toFixed(2)}x</Text>
+                      <View style={styles.speedAdjustRow}>
+                        <Pressable
+                          onPress={() => setSpeedRate(speedRate - SPEED_STEP)}
+                          style={[styles.speedAdjustButton, { backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)' }]}>
+                          <Text style={[styles.speedAdjustText, { color: palette.sheetText }]}>-</Text>
+                        </Pressable>
+                        <Slider
+                          style={styles.speedSlider}
+                          minimumValue={SPEED_MIN}
+                          maximumValue={SPEED_MAX}
+                          step={SPEED_STEP}
+                          value={speedRate}
+                          minimumTrackTintColor={palette.sheetText}
+                          maximumTrackTintColor={isDark ? 'rgba(255,255,255,0.38)' : 'rgba(15,23,42,0.24)'}
+                          thumbTintColor={palette.sheetText}
+                          onValueChange={setSpeedRate}
+                        />
+                        <Pressable
+                          onPress={() => setSpeedRate(speedRate + SPEED_STEP)}
+                          style={[styles.speedAdjustButton, { backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)' }]}>
+                          <Text style={[styles.speedAdjustText, { color: palette.sheetText }]}>+</Text>
+                        </Pressable>
+                      </View>
+                      <View style={styles.speedPresetRow}>
+                        {SPEED_PRESET_LABELS.map((preset) => {
+                          const active = Math.abs(speedRate - preset) < 0.001;
+                          return (
+                            <Pressable
+                              key={preset}
+                              onPress={() => setSpeedRate(preset)}
+                              style={[
+                                styles.speedPresetPill,
+                                {
+                                  borderColor: active ? palette.sheetActiveBorder : palette.sheetBorder,
+                                  backgroundColor: active
+                                    ? palette.sheetActiveBg
+                                    : isDark
+                                      ? 'rgba(255,255,255,0.08)'
+                                      : 'rgba(15,23,42,0.06)',
+                                },
+                              ]}>
+                              <Text style={[styles.speedPresetText, { color: active ? palette.sheetActiveBorder : palette.sheetText }]}>
+                                {formatPresetSpeedLabel(preset)}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
                     </View>
                   </>
                 ) : (
@@ -535,27 +596,56 @@ export default function HomeScreen() {
                         </Text>
                       </Pressable>
                     </View>
-                    <View style={styles.sheetOptionsGrid}>
-                      {SLEEP_PRESETS.map((preset) => {
-                        const active = sleepTimerOn && preset === sleepTimerMinutes;
-                        return (
-                          <Pressable
-                            key={preset}
-                            onPress={() => {
-                              setSleepTimer(preset);
-                              setSheet(null);
-                            }}
-                            style={[
-                              styles.sheetPill,
-                              { borderColor: palette.sheetBorder, backgroundColor: isDark ? 'rgba(30,49,56,0.7)' : 'rgba(255,255,255,0.65)' },
-                              active && { borderColor: palette.sheetActiveBorder, backgroundColor: palette.sheetActiveBg },
-                            ]}>
-                            <Text style={[styles.sheetPillText, { color: palette.sheetText }, active && { color: palette.sheetActiveBorder }]}>
-                              {preset}m
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
+                    <View style={styles.speedControlWrap}>
+                      <Text style={[styles.speedValueText, { color: palette.sheetText }]}>{sleepMinutesValue}m</Text>
+                      <View style={styles.speedAdjustRow}>
+                        <Pressable
+                          onPress={() => setSleepMinutesValue(sleepMinutesValue - SLEEP_MINUTES_STEP)}
+                          style={[styles.speedAdjustButton, { backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)' }]}>
+                          <Text style={[styles.speedAdjustText, { color: palette.sheetText }]}>-</Text>
+                        </Pressable>
+                        <Slider
+                          style={styles.speedSlider}
+                          minimumValue={SLEEP_MINUTES_MIN}
+                          maximumValue={SLEEP_MINUTES_MAX}
+                          step={SLEEP_MINUTES_STEP}
+                          value={sleepMinutesValue}
+                          minimumTrackTintColor={palette.sheetText}
+                          maximumTrackTintColor={isDark ? 'rgba(255,255,255,0.38)' : 'rgba(15,23,42,0.24)'}
+                          thumbTintColor={palette.sheetText}
+                          onValueChange={setSleepMinutesValue}
+                        />
+                        <Pressable
+                          onPress={() => setSleepMinutesValue(sleepMinutesValue + SLEEP_MINUTES_STEP)}
+                          style={[styles.speedAdjustButton, { backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)' }]}>
+                          <Text style={[styles.speedAdjustText, { color: palette.sheetText }]}>+</Text>
+                        </Pressable>
+                      </View>
+                      <View style={styles.speedPresetRow}>
+                        {SLEEP_PRESET_LABELS.map((preset) => {
+                          const active = sleepMinutesValue === preset;
+                          return (
+                            <Pressable
+                              key={preset}
+                              onPress={() => setSleepMinutesValue(preset)}
+                              style={[
+                                styles.speedPresetPill,
+                                {
+                                  borderColor: active ? palette.sheetActiveBorder : palette.sheetBorder,
+                                  backgroundColor: active
+                                    ? palette.sheetActiveBg
+                                    : isDark
+                                      ? 'rgba(255,255,255,0.08)'
+                                      : 'rgba(15,23,42,0.06)',
+                                },
+                              ]}>
+                              <Text style={[styles.speedPresetText, { color: active ? palette.sheetActiveBorder : palette.sheetText }]}>
+                                {preset}m
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
                     </View>
                   </>
                 )}
@@ -564,7 +654,7 @@ export default function HomeScreen() {
             <Pressable
               style={[styles.cancelButton, { backgroundColor: palette.sheetBg, borderColor: palette.sheetBorder }]}
               onPress={() => setSheet(null)}>
-              <Text style={[styles.cancelText, { color: palette.accent }]}>Cancel</Text>
+              <Text style={[styles.cancelText, { color: palette.accent }]}>{sheet === 'speed' ? 'Done' : 'Cancel'}</Text>
             </Pressable>
           </View>
         </View>
@@ -845,6 +935,57 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     justifyContent: 'center',
+  },
+  speedControlWrap: {
+    paddingHorizontal: 2,
+    paddingTop: 0,
+    paddingBottom: 2,
+    gap: 12,
+  },
+  speedValueText: {
+    textAlign: 'center',
+    fontSize: 31,
+    fontWeight: '500',
+    letterSpacing: -0.8,
+  },
+  speedAdjustRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  speedAdjustButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  speedAdjustText: {
+    fontSize: 38,
+    lineHeight: 38,
+    fontWeight: '300',
+    marginTop: -4,
+  },
+  speedSlider: {
+    flex: 1,
+    height: 34,
+  },
+  speedPresetRow: {
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'space-between',
+  },
+  speedPresetPill: {
+    flex: 1,
+    borderRadius: 999,
+    borderWidth: 1,
+    minHeight: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  speedPresetText: {
+    fontSize: 15,
+    fontWeight: '700',
   },
   sheetPill: {
     borderRadius: 10,
