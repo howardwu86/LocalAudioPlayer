@@ -1,7 +1,7 @@
 Privacy Policy
-Last Updated: February 16, 2026
+Last Updated: February 18, 2026
 
-App Name: Local Audio Player
+App Name: LA Player: Local Audio Player
 
 Developer: Shiny Peak Information Technology Inc.
 
